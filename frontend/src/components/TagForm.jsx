@@ -6,8 +6,8 @@ import ArtworkPicker from "./ArtworkPicker";
 
 export default function TagForm({ video, outputDir, queryGuess, aiGuess, initialArtwork, onSave }) {
   const guess = useMemo(
-    () => mergeGuesses(video.guess, queryGuess, aiGuess),
-    [video, queryGuess, aiGuess]
+    () => mergeGuesses(queryGuess, aiGuess),
+    [queryGuess, aiGuess]
   );
   const f = useTagFields(guess, initialArtwork);
   const [status, setStatus] = useState(null);

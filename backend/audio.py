@@ -8,6 +8,7 @@ from mutagen.id3 import APIC, ID3, TALB, TIT2, TPE1
 from mutagen.mp3 import MP3
 from PIL import Image
 
+from artwork import DESKTOP_USER_AGENT
 from title_parsing import build_display_title, sanitize_filename
 from youtube import FFMPEG_LOCATION, download_audio
 
@@ -69,9 +70,7 @@ def tag_mp3(mp3_path, display_title, artist, anime, cover_url):
 
     if cover_url:
         try:
-            cover_req = urllib.request.Request(
-                cover_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            )
+            cover_req = urllib.request.Request(cover_url, headers={"User-Agent": DESKTOP_USER_AGENT})
             with urllib.request.urlopen(cover_req, timeout=10) as resp:
                 image_data = resp.read()
             image_data = to_square_jpeg(image_data)

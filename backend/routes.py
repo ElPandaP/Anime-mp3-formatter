@@ -1,16 +1,42 @@
 from flask import Blueprint, jsonify, request
 from yt_dlp import YoutubeDL
 
-from ai_guess import ai_guess_titles, ai_guess_with_search
+from ai_guess import ai_guess_with_search
 from artwork import search_anime_cover, search_artwork
 from audio import process_download
 from folder_dialog import pick_folder_dialog
 from llm_client import LLM_API_KEY, ai_guess_rate_limit_ok
 from settings_store import DEFAULT_OUTPUT_DIR, load_config, save_config
-from title_parsing import guess_fields_from_title
 from youtube import get_audio_stream_url
 
 bp = Blueprint("api", __name__)
+
+
+def _build_video_entry(entry, include_channel=False):
+    video_id = entry.get("id")
+    title = entry.get("title") or ""
+    result = {
+        "id": video_id,
+        "title": title,
+        "duration": entry.get("duration"),
+        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+    }
+    if include_channel:
+        result["channel"] = entry.get("channel") or entry.get("uploader") or ""
+    return result
+
+
+def _download_from_payload(item, output_dir):
+    return process_download(
+        video_id=item.get("id"),
+        anime=item.get("anime", ""),
+        kind=item.get("type", ""),
+        number=item.get("number", ""),
+        song=item.get("song", ""),
+        artist=item.get("artist", ""),
+        output_dir=output_dir,
+        artwork_url=item.get("artwork_url"),
+    )
 
 
 @bp.route("/api/settings", methods=["GET", "POST"])
@@ -50,38 +76,8 @@ def search():
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(f"ytsearch8:{query}", download=False)
 
-    results = []
-    for entry in info.get("entries", []) or []:
-        if not entry:
-            continue
-        video_id = entry.get("id")
-        title = entry.get("title") or ""
-        results.append(
-            {
-                "id": video_id,
-                "title": title,
-                "channel": entry.get("channel") or entry.get("uploader") or "",
-                "duration": entry.get("duration"),
-                "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
-                "guess": guess_fields_from_title(title),
-            }
-        )
+    results = [_build_video_entry(entry, include_channel=True) for entry in info.get("entries", []) or [] if entry]
     return jsonify({"results": results})
-
-
-@bp.route("/api/ai-guess", methods=["POST"])
-def ai_guess():
-    data = request.get_json(force=True)
-    titles = data.get("titles") or []
-    if not titles:
-        return jsonify({"error": "No titles provided"}), 400
-    if not ai_guess_rate_limit_ok():
-        return jsonify({"error": "AI request rate limit reached, try again in a minute"}), 429
-    try:
-        results = ai_guess_titles(titles)
-        return jsonify({"results": results})
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
 
 
 @bp.route("/api/ai-guess-online", methods=["POST"])
@@ -126,21 +122,7 @@ def playlist():
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    items = []
-    for entry in info.get("entries", []) or []:
-        if not entry:
-            continue
-        video_id = entry.get("id")
-        title = entry.get("title") or ""
-        items.append(
-            {
-                "id": video_id,
-                "title": title,
-                "duration": entry.get("duration"),
-                "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
-                "guess": guess_fields_from_title(title),
-            }
-        )
+    items = [_build_video_entry(entry) for entry in info.get("entries", []) or [] if entry]
     return jsonify({"playlist_title": info.get("title", ""), "items": items})
 
 
@@ -175,16 +157,7 @@ def download_single():
     output_dir = (data.get("output_dir") or config.get("output_dir") or DEFAULT_OUTPUT_DIR).strip()
 
     try:
-        final_path = process_download(
-            video_id=data.get("id"),
-            anime=data.get("anime", ""),
-            kind=data.get("type", ""),
-            number=data.get("number", ""),
-            song=data.get("song", ""),
-            artist=data.get("artist", ""),
-            output_dir=output_dir,
-            artwork_url=data.get("artwork_url"),
-        )
+        final_path = _download_from_payload(data, output_dir)
         return jsonify({"success": True, "path": final_path})
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -200,16 +173,7 @@ def download_playlist():
     results = []
     for item in items:
         try:
-            final_path = process_download(
-                video_id=item.get("id"),
-                anime=item.get("anime", ""),
-                kind=item.get("type", ""),
-                number=item.get("number", ""),
-                song=item.get("song", ""),
-                artist=item.get("artist", ""),
-                output_dir=output_dir,
-                artwork_url=item.get("artwork_url"),
-            )
+            final_path = _download_from_payload(item, output_dir)
             results.append({"id": item.get("id"), "success": True, "path": final_path})
         except Exception as exc:
             results.append({"id": item.get("id"), "success": False, "error": str(exc)})

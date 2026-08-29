@@ -151,7 +151,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .result-info .meta { color: var(--muted); font-size: 0.85em; }
 
 .thumb-wrap { position: relative; width: 100px; cursor: pointer; flex-shrink: 0; }
-.thumb-wrap img { width: 100px; border-radius: 4px; display: block; }
+.thumb-wrap img { width: 100px; height: 100px; object-fit: cover; border-radius: 4px; display: block; }
 .thumb-wrap .play-overlay {
   position: absolute;
   inset: 0;

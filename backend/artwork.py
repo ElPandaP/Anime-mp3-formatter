@@ -7,6 +7,10 @@ import re
 import urllib.parse
 import urllib.request
 
+# Several of these hosts (AniList, its image CDN) reject requests with
+# Python's default urllib User-Agent - a normal browser one gets through.
+DESKTOP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+
 
 def search_artwork(query, limit=8):
     params = urllib.parse.urlencode({"term": query, "media": "music", "limit": limit})
@@ -56,7 +60,7 @@ def search_anime_cover(anime_name):
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "User-Agent": DESKTOP_USER_AGENT,
         },
     )
     with urllib.request.urlopen(req, timeout=10) as resp:

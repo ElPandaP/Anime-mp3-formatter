@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { loadPlaylist, downloadPlaylist, getAiGuesses, getAiGuessOnline, searchArtwork } from "../api";
-import { mergeGuesses } from "../utils";
+import { loadPlaylist, downloadPlaylist } from "../api";
+import { resolveItemTags } from "../resolveTags";
 import PlaylistRow from "./PlaylistRow";
 import TagForm from "./TagForm";
 
@@ -41,40 +41,8 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
     setPreparing(true);
     setPreparedCount(0);
 
-    let batchGuesses = {};
-    if (aiEnabled) {
-      try {
-        const data = await getAiGuesses(playlistItems.map((item) => item.title));
-        playlistItems.forEach((item, i) => {
-          batchGuesses[item.id] = data.results[i];
-        });
-      } catch {
-        // AI parsing is optional - fall back to rule-based guessing only.
-      }
-    }
-
     for (const item of playlistItems) {
-      let finalGuess = mergeGuesses(item.guess, batchGuesses[item.id]);
-      if (aiEnabled) {
-        try {
-          const data = await getAiGuessOnline(item.id, item.title, finalGuess);
-          finalGuess = mergeGuesses(finalGuess, data.result);
-        } catch {
-          // Best-effort enrichment - keep whatever we already had.
-        }
-      }
-
-      let artworkUrl = null;
-      let artworkCandidates = [];
-      if (finalGuess.anime) {
-        try {
-          const artData = await searchArtwork(finalGuess.anime);
-          artworkCandidates = artData.results;
-          artworkUrl = artData.results[0]?.artwork_url ?? null;
-        } catch {
-          // No cover art found - can still be picked manually via Edit.
-        }
-      }
+      const { finalGuess, artworkUrl, artworkCandidates } = await resolveItemTags(item, null, aiEnabled);
 
       const resolved = {
         anime: finalGuess.anime || "",
