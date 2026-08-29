@@ -1,3 +1,5 @@
 flask
 yt-dlp
 mutagen
+python-dotenv
+pillow

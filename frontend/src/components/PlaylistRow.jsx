@@ -40,7 +40,7 @@ const PlaylistRow = forwardRef(function PlaylistRow({ video }, ref) {
           <div className="video-title">
             {video.title} ({formatDuration(video.duration)})
           </div>
-          <input placeholder="Anime" value={f.anime} onChange={(e) => f.setAnime(e.target.value)} />
+          <input className="f-anime" placeholder="Anime" value={f.anime} onChange={(e) => f.setAnime(e.target.value)} />
           <select value={f.type} onChange={(e) => f.setType(e.target.value)}>
             <option value="OP">OP</option>
             <option value="ED">ED</option>

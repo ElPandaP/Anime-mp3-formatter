@@ -1,10 +1,15 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTagFields } from "../hooks/useTagFields";
 import { downloadTrack } from "../api";
+import { mergeGuesses } from "../utils";
 import ArtworkPicker from "./ArtworkPicker";
 
-export default function TagForm({ video, outputDir, queryGuess }) {
-  const f = useTagFields({ ...video.guess, ...queryGuess });
+export default function TagForm({ video, outputDir, queryGuess, aiGuess }) {
+  const guess = useMemo(
+    () => mergeGuesses(video.guess, queryGuess, aiGuess),
+    [video, queryGuess, aiGuess]
+  );
+  const f = useTagFields(guess);
   const [status, setStatus] = useState(null);
   const [downloading, setDownloading] = useState(false);
 

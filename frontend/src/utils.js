@@ -61,3 +61,18 @@ export function parseAnimeQuery(query) {
   }
   return empty;
 }
+
+// Merges guess objects in priority order: later, truthy fields win over
+// earlier ones. Lets a weak baseline (title heuristics) be topped up by
+// better sources (search-query parsing, AI) without losing fields the
+// better source didn't determine.
+export function mergeGuesses(...guesses) {
+  const result = {};
+  for (const guess of guesses) {
+    if (!guess) continue;
+    for (const key of ["anime", "type", "number", "song", "artist"]) {
+      if (guess[key]) result[key] = guess[key];
+    }
+  }
+  return result;
+}

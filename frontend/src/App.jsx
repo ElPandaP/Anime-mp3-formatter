@@ -1,12 +1,35 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Settings from "./components/Settings";
 import SearchTab from "./components/SearchTab";
 import PlaylistTab from "./components/PlaylistTab";
 import VolumeControl from "./components/VolumeControl";
+import AiToggle from "./components/AiToggle";
+import { getSettings } from "./api";
+
+const AI_ENABLED_KEY = "ai-guess-enabled";
 
 export default function App() {
   const [tab, setTab] = useState("search");
   const [outputDir, setOutputDir] = useState("");
+  const [aiAvailable, setAiAvailable] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(false);
+
+  useEffect(() => {
+    getSettings().then((data) => {
+      const available = !!data.ai_available;
+      setAiAvailable(available);
+      const stored = localStorage.getItem(AI_ENABLED_KEY);
+      setAiEnabled(stored !== null ? stored === "true" : available);
+    });
+  }, []);
+
+  function toggleAi() {
+    setAiEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem(AI_ENABLED_KEY, String(next));
+      return next;
+    });
+  }
 
   return (
     <div className="app">
@@ -28,10 +51,17 @@ export default function App() {
             YouTube playlist
           </button>
         </div>
-        <VolumeControl />
+        <div className="nav-controls">
+          <AiToggle enabled={aiEnabled} available={aiAvailable} onToggle={toggleAi} />
+          <VolumeControl />
+        </div>
       </nav>
 
-      {tab === "search" ? <SearchTab outputDir={outputDir} /> : <PlaylistTab outputDir={outputDir} />}
+      {tab === "search" ? (
+        <SearchTab outputDir={outputDir} aiEnabled={aiEnabled} />
+      ) : (
+        <PlaylistTab outputDir={outputDir} />
+      )}
     </div>
   );
 }

@@ -19,6 +19,12 @@ export const browseFolder = (initial) =>
 export const searchVideos = (query) =>
   request("/api/search", { method: "POST", body: JSON.stringify({ query }) });
 
+export const getAiGuesses = (titles) =>
+  request("/api/ai-guess", { method: "POST", body: JSON.stringify({ titles }) });
+
+export const getAiGuessOnline = (id, title, guess) =>
+  request("/api/ai-guess-online", { method: "POST", body: JSON.stringify({ id, title, guess }) });
+
 export const getStreamUrl = (id) =>
   request("/api/stream", { method: "POST", body: JSON.stringify({ id }) });
 
