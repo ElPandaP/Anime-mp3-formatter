@@ -4,17 +4,32 @@ import { downloadTrack } from "../api";
 import { mergeGuesses } from "../utils";
 import ArtworkPicker from "./ArtworkPicker";
 
-export default function TagForm({ video, outputDir, queryGuess, aiGuess }) {
+export default function TagForm({ video, outputDir, queryGuess, aiGuess, initialArtwork, onSave }) {
   const guess = useMemo(
     () => mergeGuesses(video.guess, queryGuess, aiGuess),
     [video, queryGuess, aiGuess]
   );
-  const f = useTagFields(guess);
+  const f = useTagFields(guess, initialArtwork);
   const [status, setStatus] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  const isEditMode = typeof onSave === "function";
 
   async function handleSubmit(e) {
     e.preventDefault();
+
+    if (isEditMode) {
+      onSave({
+        anime: f.anime,
+        type: f.type,
+        number: f.number,
+        song: f.song,
+        artist: f.artist,
+        artworkUrl: f.artworkUrl,
+        artworkCandidates: f.artworkCandidates,
+      });
+      return;
+    }
+
     setDownloading(true);
     setStatus(null);
     try {
@@ -68,11 +83,10 @@ export default function TagForm({ video, outputDir, queryGuess, aiGuess }) {
         candidates={f.artworkCandidates}
         loading={f.artworkLoading}
         error={f.artworkError}
-        onSearch={f.findArtwork}
         onSelect={f.setArtworkUrl}
       />
       <button type="submit" className="download-btn" disabled={downloading}>
-        {downloading ? "Downloading..." : "Download"}
+        {isEditMode ? "Done" : downloading ? "Downloading..." : "Download"}
       </button>
       {status && <span className={`status ${status.ok ? "ok" : "error"}`}>{status.text}</span>}
     </form>

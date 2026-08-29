@@ -121,7 +121,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   accent-color: var(--accent);
 }
 
-.search-side {
+.edit-panel {
   position: fixed;
   top: 150px;
   right: 24px;
@@ -130,9 +130,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   overflow-y: auto;
   z-index: 10;
 }
-.search-side .tag-form { max-width: none; }
+.edit-panel .tag-form { max-width: none; }
 @media (max-width: 1300px) {
-  .search-side { position: static; width: 100%; max-height: none; margin-top: 16px; }
+  .edit-panel { position: static; width: 100%; max-height: none; margin-top: 16px; }
 }
 
 .results { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
@@ -244,16 +244,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-direction: column;
   gap: 10px;
 }
-.playlist-row-top { display: flex; gap: 12px; }
-.playlist-row .fields { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.playlist-row .fields input, .playlist-row .fields select { padding: 6px 8px; }
-.playlist-row .video-title { width: 100%; color: var(--muted); font-size: 0.8em; margin-bottom: 4px; }
-.playlist-row .f-anime { flex: 1 1 140px; }
-.playlist-row .f-cancion { flex: 1 1 160px; }
-.playlist-row .f-artista { flex: 1 1 140px; }
-.playlist-row .f-numero { flex: 0 0 50px !important; }
-.playlist-row .row-preview { width: 100%; font-size: 0.8em; color: var(--accent); }
-.playlist-row .artwork-picker { width: 100%; }
+.playlist-row-top { display: flex; gap: 12px; align-items: center; }
+.playlist-row .fields { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.playlist-row .video-title { color: var(--muted); font-size: 0.75em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playlist-row .row-preview { font-weight: 600; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playlist-row .row-artist { font-size: 0.85em; color: var(--text); }
 
-.bulk-row { margin-top: 12px; }
+.prepare-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 16px;
+  color: var(--muted);
+  font-size: 0.9em;
+  margin: 16px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.playlist-actions { margin-top: 12px; }
 .playlist-items { margin-top: 16px; }

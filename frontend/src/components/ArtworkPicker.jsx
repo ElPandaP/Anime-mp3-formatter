@@ -1,19 +1,10 @@
-export default function ArtworkPicker({
-  artworkUrl,
-  candidates,
-  loading,
-  error,
-  onSearch,
-  onSelect,
-}) {
+export default function ArtworkPicker({ artworkUrl, candidates, loading, error, onSelect }) {
   return (
     <div className="artwork-picker">
       <div className="artwork-picker-row">
         <label>Cover art</label>
-        <button type="button" onClick={onSearch} disabled={loading}>
-          {loading ? "Searching..." : "Search cover art"}
-        </button>
         {artworkUrl && <img className="artwork-preview" src={artworkUrl} alt="Selected cover art" />}
+        {loading && <span className="status">Searching...</span>}
       </div>
       {error && <span className="status error">{error}</span>}
       {candidates.length > 0 && (

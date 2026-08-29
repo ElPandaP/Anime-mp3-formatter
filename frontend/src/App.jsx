@@ -60,7 +60,7 @@ export default function App() {
       {tab === "search" ? (
         <SearchTab outputDir={outputDir} aiEnabled={aiEnabled} />
       ) : (
-        <PlaylistTab outputDir={outputDir} />
+        <PlaylistTab outputDir={outputDir} aiEnabled={aiEnabled} />
       )}
     </div>
   );

@@ -4,19 +4,24 @@ import { buildPreview } from "../utils";
 
 const FIELDS = ["anime", "type", "number", "song", "artist"];
 
-export function useTagFields(guess = {}) {
+export function useTagFields(guess = {}, initialArtwork = null) {
   const [anime, setAnimeState] = useState(guess.anime || "");
   const [type, setTypeState] = useState(guess.type || "OP");
   const [number, setNumberState] = useState(guess.number || "");
   const [song, setSongState] = useState(guess.song || "");
   const [artist, setArtistState] = useState(guess.artist || "");
-  const [artworkUrl, setArtworkUrlState] = useState(null);
-  const [artworkCandidates, setArtworkCandidates] = useState([]);
+  const [artworkUrl, setArtworkUrlState] = useState(initialArtwork?.url ?? null);
+  const [artworkCandidates, setArtworkCandidates] = useState(initialArtwork?.candidates ?? []);
   const [artworkLoading, setArtworkLoading] = useState(false);
   const [artworkError, setArtworkError] = useState(null);
 
   const touched = useRef({ anime: false, type: false, number: false, song: false, artist: false });
   const artworkTouched = useRef(false);
+  // The caller (SearchTab) already resolved cover art for this exact anime
+  // value before showing the form at all - skip auto-searching again for
+  // that same value. Compared by value (not a one-shot flag) so React 19's
+  // StrictMode double-invoking this effect in dev doesn't re-trigger it.
+  const prefetchedAnime = useRef(initialArtwork ? guess.anime || "" : null);
 
   const setters = { anime: setAnimeState, type: setTypeState, number: setNumberState, song: setSongState, artist: setArtistState };
   const makeSetter = (key) => (value) => {
@@ -61,16 +66,11 @@ export function useTagFields(guess = {}) {
     }
   }
 
-  async function findArtwork() {
-    const query = anime.trim() || `${artist} ${song}`.trim();
-    const results = await runArtworkSearch(query);
-    if (results[0]) setArtworkUrl(results[0].artwork_url);
-  }
-
   // Auto-search cover art by anime name (song/artist come from the selected
   // video's own guess instead, so they stay specific to what was picked).
   useEffect(() => {
     if (!anime.trim()) return undefined;
+    if (anime === prefetchedAnime.current) return undefined;
     const timer = setTimeout(async () => {
       const results = await runArtworkSearch(anime.trim());
       if (!results.length) return;
@@ -96,7 +96,6 @@ export function useTagFields(guess = {}) {
     artworkCandidates,
     artworkLoading,
     artworkError,
-    findArtwork,
     preview,
   };
 }

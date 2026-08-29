@@ -1,48 +1,127 @@
-import { useRef, useState } from "react";
-import { loadPlaylist, downloadPlaylist } from "../api";
+import { useState } from "react";
+import { loadPlaylist, downloadPlaylist, getAiGuesses, getAiGuessOnline, searchArtwork } from "../api";
+import { mergeGuesses } from "../utils";
 import PlaylistRow from "./PlaylistRow";
+import TagForm from "./TagForm";
 
-export default function PlaylistTab({ outputDir }) {
+export default function PlaylistTab({ outputDir, aiEnabled }) {
   const [url, setUrl] = useState("");
   const [items, setItems] = useState([]);
-  const [bulkAnime, setBulkAnime] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [itemData, setItemData] = useState({});
+  const [editingId, setEditingId] = useState(null);
+  const [loadingPlaylist, setLoadingPlaylist] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [preparedCount, setPreparedCount] = useState(0);
   const [error, setError] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  const [results, setResults] = useState({});
   const [summary, setSummary] = useState(null);
-  const rowRefs = useRef([]);
 
   async function handleLoad() {
     if (!url.trim()) return;
-    setLoading(true);
+    setLoadingPlaylist(true);
     setError(null);
     setSummary(null);
+    setResults({});
+    setItems([]);
+    setItemData({});
+    setEditingId(null);
     try {
       const data = await loadPlaylist(url);
       setItems(data.items);
-      rowRefs.current = [];
+      setLoadingPlaylist(false);
+      prepareAllItems(data.items);
     } catch (err) {
       setError(err.message);
-    } finally {
-      setLoading(false);
+      setLoadingPlaylist(false);
     }
   }
 
-  function applyBulkAnime() {
-    rowRefs.current.forEach((r) => r && r.setAnime(bulkAnime));
+  async function prepareAllItems(playlistItems) {
+    setPreparing(true);
+    setPreparedCount(0);
+
+    let batchGuesses = {};
+    if (aiEnabled) {
+      try {
+        const data = await getAiGuesses(playlistItems.map((item) => item.title));
+        playlistItems.forEach((item, i) => {
+          batchGuesses[item.id] = data.results[i];
+        });
+      } catch {
+        // AI parsing is optional - fall back to rule-based guessing only.
+      }
+    }
+
+    for (const item of playlistItems) {
+      let finalGuess = mergeGuesses(item.guess, batchGuesses[item.id]);
+      if (aiEnabled) {
+        try {
+          const data = await getAiGuessOnline(item.id, item.title, finalGuess);
+          finalGuess = mergeGuesses(finalGuess, data.result);
+        } catch {
+          // Best-effort enrichment - keep whatever we already had.
+        }
+      }
+
+      let artworkUrl = null;
+      let artworkCandidates = [];
+      if (finalGuess.anime) {
+        try {
+          const artData = await searchArtwork(finalGuess.anime);
+          artworkCandidates = artData.results;
+          artworkUrl = artData.results[0]?.artwork_url ?? null;
+        } catch {
+          // No cover art found - can still be picked manually via Edit.
+        }
+      }
+
+      const resolved = {
+        anime: finalGuess.anime || "",
+        type: finalGuess.type || "OP",
+        number: finalGuess.number || "",
+        song: finalGuess.song || "",
+        artist: finalGuess.artist || "",
+        artworkUrl,
+        artworkCandidates,
+      };
+      setItemData((prev) => ({ ...prev, [item.id]: resolved }));
+      setPreparedCount((c) => c + 1);
+    }
+
+    setPreparing(false);
+  }
+
+  function handleSaveEdit(values) {
+    setItemData((prev) => ({ ...prev, [editingId]: values }));
+    setEditingId(null);
   }
 
   async function handleDownloadAll() {
-    const payload = rowRefs.current.filter(Boolean).map((r) => r.getData());
     setDownloading(true);
     setSummary(null);
+    const payload = items.map((item) => {
+      const data = itemData[item.id] || {};
+      return {
+        id: item.id,
+        anime: data.anime || "",
+        type: data.type || "OP",
+        number: data.number || "",
+        song: data.song || "",
+        artist: data.artist || "",
+        artwork_url: data.artworkUrl || null,
+      };
+    });
+
     try {
       const data = await downloadPlaylist(payload, outputDir);
+      const resultsById = {};
       let ok = 0;
-      data.results.forEach((r, i) => {
+      data.results.forEach((r) => {
+        resultsById[r.id] = r;
         if (r.success) ok++;
-        if (rowRefs.current[i]) rowRefs.current[i].setResult(r);
       });
+      setResults(resultsById);
       setSummary(`Done: ${ok}/${data.results.length} downloaded successfully.`);
     } catch (err) {
       setSummary(err.message);
@@ -50,6 +129,8 @@ export default function PlaylistTab({ outputDir }) {
       setDownloading(false);
     }
   }
+
+  const editingItem = editingId ? items.find((item) => item.id === editingId) : null;
 
   return (
     <div>
@@ -60,33 +141,66 @@ export default function PlaylistTab({ outputDir }) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
-        <button onClick={handleLoad} disabled={loading}>
-          {loading ? "Loading..." : "Load playlist"}
+        <button onClick={handleLoad} disabled={loadingPlaylist || preparing}>
+          {loadingPlaylist ? "Loading..." : "Load playlist"}
         </button>
       </div>
       {error && <span className="status error">{error}</span>}
 
-      {items.length > 0 && (
-        <div className="row bulk-row">
-          <input
-            type="text"
-            placeholder="Anime name (apply to all rows)"
-            value={bulkAnime}
-            onChange={(e) => setBulkAnime(e.target.value)}
-          />
-          <button onClick={applyBulkAnime}>Apply to all</button>
-          <button onClick={handleDownloadAll} disabled={downloading}>
-            {downloading ? "Downloading..." : "Download all"}
-          </button>
+      {preparing && (
+        <div className="prepare-status">
+          <span className="spinner-large" />
+          <p>
+            Preparing tags: {preparedCount}/{items.length}...
+          </p>
         </div>
       )}
 
-      <div className="playlist-items">
-        {items.map((item, i) => (
-          <PlaylistRow key={item.id} video={item} ref={(el) => (rowRefs.current[i] = el)} />
-        ))}
-      </div>
-      {summary && <div className="status ok">{summary}</div>}
+      {!preparing && items.length > 0 && (
+        <>
+          <div className="row playlist-actions">
+            <button onClick={handleDownloadAll} disabled={downloading}>
+              {downloading ? "Downloading..." : "Download all"}
+            </button>
+          </div>
+
+          <div className="playlist-items">
+            {items.map((item) => (
+              <PlaylistRow
+                key={item.id}
+                video={item}
+                data={itemData[item.id]}
+                status={
+                  results[item.id]
+                    ? {
+                        ok: results[item.id].success,
+                        text: results[item.id].success ? "OK" : results[item.id].error,
+                      }
+                    : null
+                }
+                onEdit={() => setEditingId(item.id)}
+              />
+            ))}
+          </div>
+          {summary && <div className="status ok">{summary}</div>}
+        </>
+      )}
+
+      {editingItem && (
+        <div className="edit-panel">
+          <TagForm
+            key={editingItem.id}
+            video={editingItem}
+            queryGuess={null}
+            aiGuess={itemData[editingItem.id]}
+            initialArtwork={{
+              url: itemData[editingItem.id]?.artworkUrl ?? null,
+              candidates: itemData[editingItem.id]?.artworkCandidates ?? [],
+            }}
+            onSave={handleSaveEdit}
+          />
+        </div>
+      )}
     </div>
   );
 }
