@@ -1,0 +1,63 @@
+export function formatDuration(sec) {
+  if (sec === null || sec === undefined) return "";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60)
+    .toString()
+    .padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+export function buildPreview(anime, type, number, song) {
+  anime = (anime || "").trim();
+  type = (type || "").trim();
+  number = (number || "").trim();
+  song = (song || "").trim();
+
+  let label;
+  if (type.toUpperCase() === "OST") {
+    label = `${anime} OST`.trim();
+  } else if (number) {
+    label = `${anime} ${type} ${number}`.trim();
+  } else {
+    label = `${anime} ${type}`.trim();
+  }
+  label = label.replace(/\s+/g, " ").trim();
+  return song ? (label ? `${label} - ${song}` : song) : label;
+}
+
+const TYPE_WORDS = {
+  opening: "OP",
+  op: "OP",
+  ending: "ED",
+  ed: "ED",
+  soundtrack: "OST",
+  ost: "OST",
+};
+const TYPE_ALT = Object.keys(TYPE_WORDS).join("|");
+
+function titleCase(s) {
+  return s
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+export function parseAnimeQuery(query) {
+  const q = (query || "").trim();
+  const empty = { anime: "", type: "OP", number: "" };
+  if (!q) return empty;
+
+  const prefixRe = new RegExp(`^(${TYPE_ALT})\\.?\\s*(\\d+)?\\s+(.+)$`, "i");
+  const suffixRe = new RegExp(`^(.+?)\\s+(${TYPE_ALT})\\.?\\s*(\\d+)?$`, "i");
+
+  let m = q.match(prefixRe);
+  if (m) {
+    return { type: TYPE_WORDS[m[1].toLowerCase()], number: m[2] || "", anime: titleCase(m[3]) };
+  }
+  m = q.match(suffixRe);
+  if (m) {
+    return { anime: titleCase(m[1]), type: TYPE_WORDS[m[2].toLowerCase()], number: m[3] || "" };
+  }
+  return empty;
+}
