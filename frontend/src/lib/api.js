@@ -33,6 +33,3 @@ export const searchArtwork = (query) =>
 
 export const downloadTrack = (payload) =>
   request("/api/download", { method: "POST", body: JSON.stringify(payload) });
-
-export const downloadPlaylist = (items, output_dir) =>
-  request("/api/playlist/download", { method: "POST", body: JSON.stringify({ items, output_dir }) });

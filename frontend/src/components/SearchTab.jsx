@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { searchVideos } from "../api";
-import { parseAnimeQuery } from "../utils";
-import { resolveItemTags } from "../resolveTags";
+import { searchVideos } from "../lib/api";
+import { parseAnimeQuery } from "../lib/utils";
+import { resolveItemTags } from "../lib/resolveTags";
 import TagForm from "./TagForm";
 import ResultCard from "./ResultCard";
 
@@ -58,7 +58,7 @@ export default function SearchTab({ outputDir, aiEnabled }) {
       <div className="row">
         <input
           type="text"
-          placeholder="E.g. mushoku tensei op 1"
+          placeholder="E.g. frieren ed 2"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && runSearch()}

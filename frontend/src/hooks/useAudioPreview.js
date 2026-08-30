@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { getStreamUrl } from "../api";
-import { registerAudio, getDefaultVolume } from "../previewPlayer";
+import { getStreamUrl } from "../lib/api";
+import { registerAudio, getDefaultVolume } from "../lib/previewPlayer";
 
 export function useAudioPreview(id) {
   const [url, setUrl] = useState(null);

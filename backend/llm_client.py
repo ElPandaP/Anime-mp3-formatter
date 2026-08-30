@@ -5,6 +5,7 @@ only changing the three LLM_* values in .env, no code changes needed."""
 import json
 import os
 import re
+import threading
 import time
 import urllib.request
 from collections import deque
@@ -29,16 +30,18 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "claude-haiku-4-5")
 AI_GUESS_RATE_LIMIT = 60
 AI_GUESS_RATE_WINDOW_SECONDS = 60
 _ai_guess_call_times = deque()
+_ai_guess_lock = threading.Lock()
 
 
 def ai_guess_rate_limit_ok():
     now = time.time()
-    while _ai_guess_call_times and now - _ai_guess_call_times[0] > AI_GUESS_RATE_WINDOW_SECONDS:
-        _ai_guess_call_times.popleft()
-    if len(_ai_guess_call_times) >= AI_GUESS_RATE_LIMIT:
-        return False
-    _ai_guess_call_times.append(now)
-    return True
+    with _ai_guess_lock:
+        while _ai_guess_call_times and now - _ai_guess_call_times[0] > AI_GUESS_RATE_WINDOW_SECONDS:
+            _ai_guess_call_times.popleft()
+        if len(_ai_guess_call_times) >= AI_GUESS_RATE_LIMIT:
+            return False
+        _ai_guess_call_times.append(now)
+        return True
 
 
 def call_llm(prompt):

@@ -1,5 +1,5 @@
 import { useAudioPreview } from "../hooks/useAudioPreview";
-import { formatDuration } from "../utils";
+import { formatDuration } from "../lib/utils";
 import PreviewThumb from "./PreviewThumb";
 
 export default function ResultCard({ item, onSelect }) {

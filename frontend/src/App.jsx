@@ -4,7 +4,7 @@ import SearchTab from "./components/SearchTab";
 import PlaylistTab from "./components/PlaylistTab";
 import VolumeControl from "./components/VolumeControl";
 import AiToggle from "./components/AiToggle";
-import { getSettings } from "./api";
+import { getSettings } from "./lib/api";
 
 const AI_ENABLED_KEY = "ai-guess-enabled";
 

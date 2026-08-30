@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getSettings, saveSettings, browseFolder } from "../api";
+import { getSettings, saveSettings, browseFolder } from "../lib/api";
 
 export default function Settings({ outputDir, setOutputDir }) {
   const [status, setStatus] = useState(null);

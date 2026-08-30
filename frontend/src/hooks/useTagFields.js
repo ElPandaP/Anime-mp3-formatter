@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { searchArtwork } from "../api";
-import { buildPreview } from "../utils";
+import { searchArtwork } from "../lib/api";
+import { buildPreview } from "../lib/utils";
 
 const FIELDS = ["anime", "type", "number", "song", "artist"];
 

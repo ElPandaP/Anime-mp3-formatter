@@ -7,6 +7,17 @@ export function formatDuration(sec) {
   return `${m}:${s}`;
 }
 
+// Mirrors backend title_parsing.sanitize_filename - strips the characters
+// Windows/most filesystems reject, collapses whitespace. Used to spot two
+// tracks that would land on the same .mp3 path before downloading.
+export function sanitizeFilename(name) {
+  const cleaned = (name || "")
+    .replace(/[<>:"/\\|?*]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || "untitled";
+}
+
 export function buildPreview(anime, type, number, song) {
   anime = (anime || "").trim();
   type = (type || "").trim();
@@ -60,6 +71,22 @@ export function parseAnimeQuery(query) {
     return { anime: titleCase(m[1]), type: TYPE_WORDS[m[2].toLowerCase()], number: m[3] || "" };
   }
   return empty;
+}
+
+// Runs `worker(item, index)` across all items with at most `concurrency`
+// running at once. Resolves when every item is done. The worker is
+// responsible for its own error handling - the pool never aborts early, so
+// one failed item doesn't stop the rest.
+export async function runPool(items, concurrency, worker) {
+  const queue = [...items.entries()];
+  const drain = async () => {
+    while (queue.length) {
+      const [index, item] = queue.shift();
+      await worker(item, index);
+    }
+  };
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, drain);
+  await Promise.all(workers);
 }
 
 // Merges guess objects in priority order: later, truthy fields win over

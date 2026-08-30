@@ -267,3 +267,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .playlist-actions { margin-top: 12px; }
 .playlist-items { margin-top: 16px; }
+
+.name-clashes {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e04b4b;
+  border-radius: 8px;
+}
+.name-clashes p { margin: 0 0 6px; }
+.name-clashes ul { margin: 0; padding-left: 18px; }
+.name-clashes li { margin: 2px 0; }

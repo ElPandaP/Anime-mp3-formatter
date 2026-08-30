@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTagFields } from "../hooks/useTagFields";
-import { downloadTrack } from "../api";
-import { mergeGuesses } from "../utils";
+import { downloadTrack } from "../lib/api";
+import { mergeGuesses } from "../lib/utils";
 import ArtworkPicker from "./ArtworkPicker";
 
 export default function TagForm({ video, outputDir, queryGuess, aiGuess, initialArtwork, onSave }) {

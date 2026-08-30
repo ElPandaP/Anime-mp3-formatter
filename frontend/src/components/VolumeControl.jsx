@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { getDefaultVolume, setDefaultVolume } from "../previewPlayer";
+import { getDefaultVolume, setDefaultVolume } from "../lib/previewPlayer";
 
 export default function VolumeControl() {
   const [volume, setVolume] = useState(getDefaultVolume());

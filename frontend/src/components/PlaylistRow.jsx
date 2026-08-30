@@ -1,5 +1,5 @@
 import { useAudioPreview } from "../hooks/useAudioPreview";
-import { formatDuration, buildPreview } from "../utils";
+import { formatDuration, buildPreview } from "../lib/utils";
 import PreviewThumb from "./PreviewThumb";
 
 export default function PlaylistRow({ video, data, status, onEdit }) {

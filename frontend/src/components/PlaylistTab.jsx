@@ -1,8 +1,14 @@
 import { useState } from "react";
-import { loadPlaylist, downloadPlaylist } from "../api";
-import { resolveItemTags } from "../resolveTags";
+import { loadPlaylist, downloadTrack } from "../lib/api";
+import { runPool, buildPreview, sanitizeFilename } from "../lib/utils";
+import { resolveItemTags } from "../lib/resolveTags";
 import PlaylistRow from "./PlaylistRow";
 import TagForm from "./TagForm";
+
+// Tag prep is network/LLM-bound - several can run at once. Downloads are
+// CPU-bound (ffmpeg mp3 conversion + loudness pass), so keep those lower.
+const TAG_CONCURRENCY = 5;
+const DOWNLOAD_CONCURRENCY = 3;
 
 export default function PlaylistTab({ outputDir, aiEnabled }) {
   const [url, setUrl] = useState("");
@@ -14,8 +20,12 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
   const [preparedCount, setPreparedCount] = useState(0);
   const [error, setError] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  const [downloadedCount, setDownloadedCount] = useState(0);
   const [results, setResults] = useState({});
   const [summary, setSummary] = useState(null);
+  // Filenames that would collide - shown as a warning; a second click on
+  // "Download all" goes ahead anyway.
+  const [nameClashes, setNameClashes] = useState([]);
 
   async function handleLoad() {
     if (!url.trim()) return;
@@ -26,6 +36,7 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
     setItems([]);
     setItemData({});
     setEditingId(null);
+    setNameClashes([]);
     try {
       const data = await loadPlaylist(url);
       setItems(data.items);
@@ -41,7 +52,7 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
     setPreparing(true);
     setPreparedCount(0);
 
-    for (const item of playlistItems) {
+    await runPool(playlistItems, TAG_CONCURRENCY, async (item) => {
       const { finalGuess, artworkUrl, artworkCandidates } = await resolveItemTags(item, null, aiEnabled);
 
       const resolved = {
@@ -55,7 +66,7 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
       };
       setItemData((prev) => ({ ...prev, [item.id]: resolved }));
       setPreparedCount((c) => c + 1);
-    }
+    });
 
     setPreparing(false);
   }
@@ -63,39 +74,59 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
   function handleSaveEdit(values) {
     setItemData((prev) => ({ ...prev, [editingId]: values }));
     setEditingId(null);
+    setNameClashes([]);
+  }
+
+  function findNameClashes() {
+    const byName = {};
+    for (const item of items) {
+      const d = itemData[item.id] || {};
+      const name = sanitizeFilename(buildPreview(d.anime, d.type, d.number, d.song));
+      (byName[name] ||= []).push(d.song || item.title);
+    }
+    return Object.entries(byName)
+      .filter(([, songs]) => songs.length > 1)
+      .map(([name, songs]) => ({ name, songs }));
   }
 
   async function handleDownloadAll() {
+    const clashes = findNameClashes();
+    if (clashes.length && !nameClashes.length) {
+      // First click with clashes: warn and wait for a second click.
+      setNameClashes(clashes);
+      return;
+    }
+    setNameClashes([]);
     setDownloading(true);
     setSummary(null);
-    const payload = items.map((item) => {
+    setResults({});
+    setDownloadedCount(0);
+
+    const resultsAcc = {};
+    await runPool(items, DOWNLOAD_CONCURRENCY, async (item) => {
       const data = itemData[item.id] || {};
-      return {
-        id: item.id,
-        anime: data.anime || "",
-        type: data.type || "OP",
-        number: data.number || "",
-        song: data.song || "",
-        artist: data.artist || "",
-        artwork_url: data.artworkUrl || null,
-      };
+      try {
+        const res = await downloadTrack({
+          id: item.id,
+          anime: data.anime || "",
+          type: data.type || "OP",
+          number: data.number || "",
+          song: data.song || "",
+          artist: data.artist || "",
+          artwork_url: data.artworkUrl || null,
+          output_dir: outputDir,
+        });
+        resultsAcc[item.id] = { id: item.id, success: true, path: res.path };
+      } catch (err) {
+        resultsAcc[item.id] = { id: item.id, success: false, error: err.message };
+      }
+      setResults((prev) => ({ ...prev, [item.id]: resultsAcc[item.id] }));
+      setDownloadedCount((c) => c + 1);
     });
 
-    try {
-      const data = await downloadPlaylist(payload, outputDir);
-      const resultsById = {};
-      let ok = 0;
-      data.results.forEach((r) => {
-        resultsById[r.id] = r;
-        if (r.success) ok++;
-      });
-      setResults(resultsById);
-      setSummary(`Done: ${ok}/${data.results.length} downloaded successfully.`);
-    } catch (err) {
-      setSummary(err.message);
-    } finally {
-      setDownloading(false);
-    }
+    const ok = Object.values(resultsAcc).filter((r) => r.success).length;
+    setSummary(`Done: ${ok}/${items.length} downloaded successfully.`);
+    setDownloading(false);
   }
 
   const editingItem = editingId ? items.find((item) => item.id === editingId) : null;
@@ -128,9 +159,29 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
         <>
           <div className="row playlist-actions">
             <button onClick={handleDownloadAll} disabled={downloading}>
-              {downloading ? "Downloading..." : "Download all"}
+              {downloading
+                ? `Downloading ${downloadedCount}/${items.length}...`
+                : nameClashes.length
+                  ? "Download anyway"
+                  : "Download all"}
             </button>
           </div>
+
+          {nameClashes.length > 0 && !downloading && (
+            <div className="status error name-clashes">
+              <p>
+                These tracks would be saved to the same filename and overwrite each
+                other. Edit their tags, or click "Download anyway" to continue.
+              </p>
+              <ul>
+                {nameClashes.map((clash) => (
+                  <li key={clash.name}>
+                    <strong>{clash.name}.mp3</strong> — {clash.songs.join(", ")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="playlist-items">
             {items.map((item) => (

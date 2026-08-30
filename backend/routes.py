@@ -161,21 +161,3 @@ def download_single():
         return jsonify({"success": True, "path": final_path})
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
-
-
-@bp.route("/api/playlist/download", methods=["POST"])
-def download_playlist():
-    data = request.get_json(force=True)
-    config = load_config()
-    output_dir = (data.get("output_dir") or config.get("output_dir") or DEFAULT_OUTPUT_DIR).strip()
-    items = data.get("items", [])
-
-    results = []
-    for item in items:
-        try:
-            final_path = _download_from_payload(item, output_dir)
-            results.append({"id": item.get("id"), "success": True, "path": final_path})
-        except Exception as exc:
-            results.append({"id": item.get("id"), "success": False, "error": str(exc)})
-
-    return jsonify({"results": results})
