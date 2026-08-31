@@ -2,9 +2,10 @@ import { useAudioPreview } from "../hooks/useAudioPreview";
 import { formatDuration, buildPreview } from "../lib/utils";
 import PreviewThumb from "./PreviewThumb";
 
-export default function PlaylistRow({ video, data, status, onEdit }) {
-  const preview = useAudioPreview(video.id);
+export default function PlaylistRow({ video, data, status, onEdit, onUnavailable }) {
+  const preview = useAudioPreview(video.id, onUnavailable);
   const summary = data ? buildPreview(data.anime, data.type, data.number, data.song) : "";
+  const unavailable = status?.kind === "unavailable";
 
   return (
     <div className="playlist-row">
@@ -14,6 +15,7 @@ export default function PlaylistRow({ video, data, status, onEdit }) {
           loading={preview.loading}
           isPlaying={preview.isPlaying}
           onClick={preview.toggle}
+          disabled={unavailable}
         />
         <div className="fields">
           <div className="video-title">
@@ -21,13 +23,21 @@ export default function PlaylistRow({ video, data, status, onEdit }) {
           </div>
           <div className="row-preview">{summary || "(no tags yet)"}</div>
           {data?.artist && <div className="row-artist">{data.artist}</div>}
-          {status && <span className={`row-status status ${status.ok ? "ok" : "error"}`}>{status.text}</span>}
+          {status && (
+            <span
+              className={`row-status status ${
+                status.kind === "ok" ? "ok" : status.kind === "error" ? "error" : ""
+              }`}
+            >
+              {status.text}
+            </span>
+          )}
         </div>
         <button type="button" onClick={onEdit}>
           Edit
         </button>
       </div>
-      {preview.error && <span className="status error">{preview.error}</span>}
+      {!unavailable && preview.error && <span className="status error">{preview.error}</span>}
       {preview.url && (
         <audio ref={preview.audioRef} src={preview.url} controls autoPlay className="preview-bar" />
       )}

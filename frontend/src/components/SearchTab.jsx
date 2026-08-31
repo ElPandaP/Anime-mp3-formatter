@@ -37,11 +37,25 @@ export default function SearchTab({ outputDir, aiEnabled }) {
   async function handleSelect(item) {
     setSelected(item);
     setEnrichingId(item.id);
+    setError(null);
 
     // The search box text (e.g. "86 ed 2") is a strong hint for
     // anime/type/number - the AI gets it and everything else from the
     // video's own title and description.
-    const { finalGuess, artworkUrl, artworkCandidates } = await resolveItemTags(item, queryGuess, aiEnabled);
+    let finalGuess = queryGuess || {};
+    let artworkUrl = null;
+    let artworkCandidates = [];
+    try {
+      ({ finalGuess, artworkUrl, artworkCandidates } = await resolveItemTags(item, queryGuess, aiEnabled));
+    } catch (err) {
+      setError(
+        err.status === "rate_limited"
+          ? "YouTube is rate-limiting requests (anti-bot check). Wait a few minutes and try again."
+          : err.status === "unavailable"
+            ? "That video is unavailable (private, deleted or copyright-blocked)."
+            : err.message,
+      );
+    }
 
     setAiGuesses((prev) => ({ ...prev, [item.id]: finalGuess }));
     // Resolve cover art too, before revealing the panel - so nothing pops in

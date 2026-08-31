@@ -15,7 +15,7 @@ from artwork import search_anime_cover, search_artwork
 from japanese_text import ROMANIZATION_RULE, is_japanese, strip_japanese
 from llm_client import call_llm, extract_json
 from title_parsing import strip_type_labels
-from youtube import get_video_description
+from youtube import RateLimitedError, VideoUnavailableError, get_video_description
 
 FIELDS = ("anime", "song", "artist")
 
@@ -188,6 +188,10 @@ def ai_guess_with_search(video_id, title, hint):
 
     try:
         description = get_video_description(video_id)
+    except (RateLimitedError, VideoUnavailableError):
+        # These are meaningful to the caller (pause the run / skip the track) -
+        # let them bubble up instead of silently proceeding with no description.
+        raise
     except Exception:
         description = ""
 

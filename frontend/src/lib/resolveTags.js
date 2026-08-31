@@ -12,8 +12,11 @@ export async function resolveItemTags(item, hint, aiEnabled) {
     try {
       const data = await getAiGuessOnline(item.id, item.title, finalGuess);
       finalGuess = mergeGuesses(finalGuess, data.result);
-    } catch {
-      // AI unavailable (no LLM_API_KEY, rate limit, network) - fall back to
+    } catch (err) {
+      // YouTube rate-limit or a gone video are meaningful to the caller
+      // (pause the run / skip the track) - re-raise those.
+      if (err.status === "rate_limited" || err.status === "unavailable") throw err;
+      // Anything else (no LLM_API_KEY, AI rate limit, network) - fall back to
       // whatever hint we had; the form can be filled in by hand.
     }
   }

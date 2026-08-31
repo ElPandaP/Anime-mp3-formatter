@@ -75,12 +75,16 @@ export function parseAnimeQuery(query) {
 
 // Runs `worker(item, index)` across all items with at most `concurrency`
 // running at once. Resolves when every item is done. The worker is
-// responsible for its own error handling - the pool never aborts early, so
-// one failed item doesn't stop the rest.
-export async function runPool(items, concurrency, worker) {
+// responsible for its own error handling - the pool never aborts early on a
+// thrown error, so one failed item doesn't stop the rest.
+// `shouldStop` is an optional predicate checked before each item is picked
+// up; once it returns true the pool drains without starting anything new
+// (used to bail out of a segment the moment YouTube rate-limits us).
+export async function runPool(items, concurrency, worker, shouldStop) {
   const queue = [...items.entries()];
   const drain = async () => {
     while (queue.length) {
+      if (shouldStop && shouldStop()) return;
       const [index, item] = queue.shift();
       await worker(item, index);
     }

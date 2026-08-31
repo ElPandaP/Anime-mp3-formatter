@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getStreamUrl } from "../lib/api";
 import { registerAudio, getDefaultVolume } from "../lib/previewPlayer";
 
-export function useAudioPreview(id) {
+export function useAudioPreview(id, onUnavailable) {
   const [url, setUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -41,7 +41,14 @@ export function useAudioPreview(id) {
       const data = await getStreamUrl(id);
       setUrl(data.url);
     } catch (err) {
-      setError(err.message);
+      // The video is gone (private / deleted / copyright-blocked). Reuse this
+      // failed request - which happened anyway - to flag the row upstream.
+      if (err.status === "unavailable") {
+        setError("Video unavailable");
+        onUnavailable?.();
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }

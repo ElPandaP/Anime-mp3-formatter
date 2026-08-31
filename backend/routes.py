@@ -1,5 +1,4 @@
 from flask import Blueprint, jsonify, request
-from yt_dlp import YoutubeDL
 
 from ai_guess import ai_guess_with_search
 from artwork import search_anime_cover, search_artwork
@@ -7,9 +6,23 @@ from audio import process_download
 from folder_dialog import pick_folder_dialog
 from llm_client import LLM_API_KEY, ai_guess_rate_limit_ok
 from settings_store import DEFAULT_OUTPUT_DIR, load_config, save_config
-from youtube import get_audio_stream_url
+from youtube import (
+    RateLimitedError,
+    VideoUnavailableError,
+    get_audio_stream_url,
+    playlist_entries,
+    search_entries,
+)
 
 bp = Blueprint("api", __name__)
+
+RATE_LIMIT_MESSAGE = (
+    "YouTube is rate-limiting requests (anti-bot check). Wait a few minutes and retry."
+)
+
+
+def _rate_limited_response():
+    return jsonify({"status": "rate_limited", "error": RATE_LIMIT_MESSAGE}), 429
 
 
 def _build_video_entry(entry, include_channel=False):
@@ -72,11 +85,12 @@ def search():
     if not query:
         return jsonify({"error": "Search query is empty"}), 400
 
-    ydl_opts = {"quiet": True, "noplaylist": True, "extract_flat": "in_playlist"}
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"ytsearch8:{query}", download=False)
+    try:
+        entries = search_entries(query, limit=8)
+    except RateLimitedError:
+        return _rate_limited_response()
 
-    results = [_build_video_entry(entry, include_channel=True) for entry in info.get("entries", []) or [] if entry]
+    results = [_build_video_entry(entry, include_channel=True) for entry in entries]
     return jsonify({"results": results})
 
 
@@ -92,6 +106,10 @@ def ai_guess_online():
     try:
         result = ai_guess_with_search(video_id, title, data.get("guess"))
         return jsonify({"result": result})
+    except RateLimitedError:
+        return _rate_limited_response()
+    except VideoUnavailableError as exc:
+        return jsonify({"status": "unavailable", "error": str(exc)}), 422
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -107,6 +125,10 @@ def stream():
         if not stream_url:
             return jsonify({"error": "No audio stream found"}), 404
         return jsonify({"url": stream_url})
+    except RateLimitedError:
+        return _rate_limited_response()
+    except VideoUnavailableError as exc:
+        return jsonify({"status": "unavailable", "error": str(exc)}), 422
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -118,12 +140,17 @@ def playlist():
     if not url:
         return jsonify({"error": "Playlist URL is empty"}), 400
 
-    ydl_opts = {"quiet": True, "extract_flat": "in_playlist"}
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        title, entries, skipped = playlist_entries(url)
+    except RateLimitedError:
+        return _rate_limited_response()
 
-    items = [_build_video_entry(entry) for entry in info.get("entries", []) or [] if entry]
-    return jsonify({"playlist_title": info.get("title", ""), "items": items})
+    items = [_build_video_entry(entry) for entry in entries]
+    return jsonify({
+        "playlist_title": title,
+        "items": items,
+        "skipped_unavailable": skipped,
+    })
 
 
 @bp.route("/api/artwork", methods=["POST"])
@@ -159,5 +186,9 @@ def download_single():
     try:
         final_path = _download_from_payload(data, output_dir)
         return jsonify({"success": True, "path": final_path})
+    except RateLimitedError:
+        return _rate_limited_response()
+    except VideoUnavailableError as exc:
+        return jsonify({"success": False, "status": "unavailable", "error": str(exc)}), 422
     except Exception as exc:
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return jsonify({"success": False, "status": "error", "error": str(exc)}), 500

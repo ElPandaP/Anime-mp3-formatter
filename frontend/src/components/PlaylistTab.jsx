@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { loadPlaylist, downloadTrack } from "../lib/api";
 import { runPool, buildPreview, sanitizeFilename } from "../lib/utils";
 import { resolveItemTags } from "../lib/resolveTags";
@@ -7,13 +7,39 @@ import TagForm from "./TagForm";
 
 // Tag prep is network/LLM-bound - several can run at once. Downloads are
 // CPU-bound (ffmpeg mp3 conversion + loudness pass), so keep those lower.
-const TAG_CONCURRENCY = 5;
-const DOWNLOAD_CONCURRENCY = 3;
+// Both are deliberately modest: firing hundreds of yt-dlp calls in a burst
+// is what trips YouTube's "confirm you're not a bot" wall.
+const TAG_CONCURRENCY = 3;
+const DOWNLOAD_CONCURRENCY = 2;
+
+// Playlists longer than this are processed in chunks the user picks one at a
+// time, so a single sitting never hammers YouTube hard enough to get blocked.
+const SEGMENT_SIZE = 50;
+
+const RATE_LIMIT_TEXT =
+  "YouTube is rate-limiting requests (anti-bot check). This clears on its own " +
+  "in a few minutes - wait, then hit Retry.";
+
+function buildSegments(count) {
+  if (count <= SEGMENT_SIZE) return [{ start: 0, end: count }];
+  const segments = [];
+  for (let start = 0; start < count; start += SEGMENT_SIZE) {
+    segments.push({ start, end: Math.min(start + SEGMENT_SIZE, count) });
+  }
+  return segments;
+}
 
 export default function PlaylistTab({ outputDir, aiEnabled }) {
   const [url, setUrl] = useState("");
   const [items, setItems] = useState([]);
+  const [segments, setSegments] = useState([]);
+  const [activeSeg, setActiveSeg] = useState(null);
+  const [segDone, setSegDone] = useState({});
+  const [skippedOnLoad, setSkippedOnLoad] = useState(0);
   const [itemData, setItemData] = useState({});
+  // Per-item outcome that isn't a normal download result: "skipped" (video
+  // gone) set during tag prep.
+  const [itemStatus, setItemStatus] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [loadingPlaylist, setLoadingPlaylist] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -23,50 +49,122 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
   const [downloadedCount, setDownloadedCount] = useState(0);
   const [results, setResults] = useState({});
   const [summary, setSummary] = useState(null);
+  const [rateLimited, setRateLimited] = useState(false);
   // Filenames that would collide - shown as a warning; a second click on
   // "Download all" goes ahead anyway.
   const [nameClashes, setNameClashes] = useState([]);
+
+  // Set true the moment a rate-limit is seen, so both pools stop pulling new
+  // work instead of grinding through the rest and failing every one.
+  const stopRef = useRef(false);
+
+  const segItems = useMemo(() => {
+    if (activeSeg === null || !segments[activeSeg]) return [];
+    const { start, end } = segments[activeSeg];
+    return items.slice(start, end);
+  }, [items, segments, activeSeg]);
+
+  const downloadableItems = useMemo(
+    () => segItems.filter((it) => itemStatus[it.id] !== "skipped"),
+    [segItems, itemStatus],
+  );
+
+  function resetRunState() {
+    setResults({});
+    setSummary(null);
+    setNameClashes([]);
+    setRateLimited(false);
+    stopRef.current = false;
+  }
 
   async function handleLoad() {
     if (!url.trim()) return;
     setLoadingPlaylist(true);
     setError(null);
-    setSummary(null);
-    setResults({});
     setItems([]);
+    setSegments([]);
+    setActiveSeg(null);
+    setSegDone({});
+    setSkippedOnLoad(0);
     setItemData({});
+    setItemStatus({});
     setEditingId(null);
-    setNameClashes([]);
+    resetRunState();
     try {
       const data = await loadPlaylist(url);
       setItems(data.items);
+      setSkippedOnLoad(data.skipped_unavailable || 0);
+      const segs = buildSegments(data.items.length);
+      setSegments(segs);
       setLoadingPlaylist(false);
-      prepareAllItems(data.items);
+      // Short lists: no chunking, jump straight in like before.
+      if (segs.length === 1) enterSegment(0, data.items, segs);
     } catch (err) {
-      setError(err.message);
+      setError(
+        err.status === "rate_limited" ? RATE_LIMIT_TEXT : err.message,
+      );
       setLoadingPlaylist(false);
     }
   }
 
-  async function prepareAllItems(playlistItems) {
+  function enterSegment(index, itemList = items, segList = segments) {
+    setActiveSeg(index);
+    resetRunState();
+    const { start, end } = segList[index];
+    prepareSegment(itemList.slice(start, end));
+  }
+
+  async function prepareSegment(slice) {
     setPreparing(true);
-    setPreparedCount(0);
+    setPreparedCount(slice.filter((it) => itemData[it.id] || itemStatus[it.id] === "skipped").length);
 
-    await runPool(playlistItems, TAG_CONCURRENCY, async (item) => {
-      const { finalGuess, artworkUrl, artworkCandidates } = await resolveItemTags(item, null, aiEnabled);
-
-      const resolved = {
-        anime: finalGuess.anime || "",
-        type: finalGuess.type || "OP",
-        number: finalGuess.number || "",
-        song: finalGuess.song || "",
-        artist: finalGuess.artist || "",
-        artworkUrl,
-        artworkCandidates,
-      };
-      setItemData((prev) => ({ ...prev, [item.id]: resolved }));
-      setPreparedCount((c) => c + 1);
-    });
+    await runPool(
+      slice,
+      TAG_CONCURRENCY,
+      async (item) => {
+        // Idempotent: a retry re-runs this over the whole slice but skips
+        // anything already resolved or already marked gone.
+        if (itemData[item.id] || itemStatus[item.id] === "skipped") return;
+        try {
+          const { finalGuess, artworkUrl, artworkCandidates } = await resolveItemTags(
+            item,
+            null,
+            aiEnabled,
+          );
+          setItemData((prev) => ({
+            ...prev,
+            [item.id]: {
+              anime: finalGuess.anime || "",
+              type: finalGuess.type || "OP",
+              number: finalGuess.number || "",
+              song: finalGuess.song || "",
+              artist: finalGuess.artist || "",
+              artworkUrl,
+              artworkCandidates,
+            },
+          }));
+          setPreparedCount((c) => c + 1);
+        } catch (err) {
+          if (err.status === "rate_limited") {
+            stopRef.current = true;
+            setRateLimited(true);
+            return;
+          }
+          if (err.status === "unavailable") {
+            setItemStatus((prev) => ({ ...prev, [item.id]: "skipped" }));
+            setPreparedCount((c) => c + 1);
+            return;
+          }
+          // Other failure - leave tags blank for the user to fill by hand.
+          setItemData((prev) => ({
+            ...prev,
+            [item.id]: { anime: "", type: "OP", number: "", song: "", artist: "" },
+          }));
+          setPreparedCount((c) => c + 1);
+        }
+      },
+      () => stopRef.current,
+    );
 
     setPreparing(false);
   }
@@ -79,7 +177,7 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
 
   function findNameClashes() {
     const byName = {};
-    for (const item of items) {
+    for (const item of downloadableItems) {
       const d = itemData[item.id] || {};
       const name = sanitizeFilename(buildPreview(d.anime, d.type, d.number, d.song));
       (byName[name] ||= []).push(d.song || item.title);
@@ -97,39 +195,108 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
       return;
     }
     setNameClashes([]);
+    setRateLimited(false);
+    stopRef.current = false;
+    await runDownload();
+  }
+
+  async function runDownload() {
     setDownloading(true);
     setSummary(null);
-    setResults({});
-    setDownloadedCount(0);
+    setDownloadedCount(
+      downloadableItems.filter((it) => results[it.id]?.status === "ok").length,
+    );
 
-    const resultsAcc = {};
-    await runPool(items, DOWNLOAD_CONCURRENCY, async (item) => {
-      const data = itemData[item.id] || {};
-      try {
-        const res = await downloadTrack({
-          id: item.id,
-          anime: data.anime || "",
-          type: data.type || "OP",
-          number: data.number || "",
-          song: data.song || "",
-          artist: data.artist || "",
-          artwork_url: data.artworkUrl || null,
-          output_dir: outputDir,
-        });
-        resultsAcc[item.id] = { id: item.id, success: true, path: res.path };
-      } catch (err) {
-        resultsAcc[item.id] = { id: item.id, success: false, error: err.message };
-      }
-      setResults((prev) => ({ ...prev, [item.id]: resultsAcc[item.id] }));
-      setDownloadedCount((c) => c + 1);
-    });
+    const resultsAcc = { ...results };
+    await runPool(
+      downloadableItems,
+      DOWNLOAD_CONCURRENCY,
+      async (item) => {
+        if (resultsAcc[item.id]?.status === "ok") return;
+        const data = itemData[item.id] || {};
+        try {
+          const res = await downloadTrack({
+            id: item.id,
+            anime: data.anime || "",
+            type: data.type || "OP",
+            number: data.number || "",
+            song: data.song || "",
+            artist: data.artist || "",
+            artwork_url: data.artworkUrl || null,
+            output_dir: outputDir,
+          });
+          resultsAcc[item.id] = { id: item.id, status: "ok", path: res.path };
+        } catch (err) {
+          const status =
+            err.status === "rate_limited"
+              ? "rate_limited"
+              : err.status === "unavailable"
+                ? "unavailable"
+                : "error";
+          resultsAcc[item.id] = { id: item.id, status, error: err.message };
+          if (status === "rate_limited") {
+            stopRef.current = true;
+            setRateLimited(true);
+          }
+        }
+        setResults((prev) => ({ ...prev, [item.id]: resultsAcc[item.id] }));
+        setDownloadedCount((c) => c + 1);
+      },
+      () => stopRef.current,
+    );
 
-    const ok = Object.values(resultsAcc).filter((r) => r.success).length;
-    setSummary(`Done: ${ok}/${items.length} downloaded successfully.`);
     setDownloading(false);
+
+    const ok = downloadableItems.filter((it) => resultsAcc[it.id]?.status === "ok").length;
+    const unavailable =
+      segItems.filter((it) => itemStatus[it.id] === "skipped").length +
+      downloadableItems.filter((it) => resultsAcc[it.id]?.status === "unavailable").length;
+    const stalled = downloadableItems.filter(
+      (it) => !resultsAcc[it.id] || resultsAcc[it.id].status === "rate_limited",
+    ).length;
+
+    const parts = [`${ok} OK`];
+    if (unavailable) parts.push(`${unavailable} skipped`);
+    if (stalled) parts.push(`${stalled} rate-limited`);
+    setSummary(`Segment ${activeSeg + 1}/${segments.length}: ${parts.join(" · ")}`);
+
+    if (!stalled) {
+      setSegDone((prev) => ({ ...prev, [activeSeg]: unavailable ? "partial" : "done" }));
+    }
+  }
+
+  async function handleRetry() {
+    stopRef.current = false;
+    setRateLimited(false);
+    const needPrep = segItems.filter(
+      (it) => !itemData[it.id] && itemStatus[it.id] !== "skipped",
+    );
+    if (needPrep.length) {
+      await prepareSegment(segItems);
+    } else {
+      await runDownload();
+    }
+  }
+
+  function rowStatus(item) {
+    if (itemStatus[item.id] === "skipped") {
+      return { kind: "unavailable", text: "Skipped — video unavailable" };
+    }
+    const r = results[item.id];
+    if (!r) return null;
+    if (r.status === "ok") return { kind: "ok", text: "OK" };
+    if (r.status === "unavailable") return { kind: "unavailable", text: "Skipped — video unavailable" };
+    if (r.status === "rate_limited") return { kind: "rate_limited", text: "Rate-limited — retry later" };
+    return { kind: "error", text: r.error };
+  }
+
+  function markUnavailable(id) {
+    setItemStatus((prev) => (prev[id] === "skipped" ? prev : { ...prev, [id]: "skipped" }));
   }
 
   const editingItem = editingId ? items.find((item) => item.id === editingId) : null;
+  const showPicker = activeSeg === null && segments.length > 1;
+  const busy = loadingPlaylist || preparing || downloading;
 
   return (
     <div>
@@ -140,30 +307,66 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
-        <button onClick={handleLoad} disabled={loadingPlaylist || preparing}>
+        <button onClick={handleLoad} disabled={busy}>
           {loadingPlaylist ? "Loading..." : "Load playlist"}
         </button>
       </div>
       {error && <span className="status error">{error}</span>}
+      {skippedOnLoad > 0 && (
+        <span className="status">
+          {skippedOnLoad} track{skippedOnLoad > 1 ? "s" : ""} skipped (private or deleted).
+        </span>
+      )}
 
-      {preparing && (
+      {showPicker && (
+        <div className="segments">
+          <p>
+            This playlist has {items.length} tracks. Process it in chunks of {SEGMENT_SIZE} to
+            stay under YouTube's rate limit — pick one to start:
+          </p>
+          <div className="row">
+            {segments.map((seg, i) => (
+              <button key={i} onClick={() => enterSegment(i)} disabled={busy}>
+                {seg.start + 1}–{seg.end}
+                {segDone[i] === "done" ? " ✓" : segDone[i] === "partial" ? " ◐" : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {rateLimited && (
+        <div className="status error name-clashes">
+          <p>{RATE_LIMIT_TEXT}</p>
+          <button onClick={handleRetry} disabled={busy}>
+            Retry remaining
+          </button>
+        </div>
+      )}
+
+      {activeSeg !== null && preparing && (
         <div className="prepare-status">
           <span className="spinner-large" />
           <p>
-            Preparing tags: {preparedCount}/{items.length}...
+            Preparing tags: {preparedCount}/{segItems.length}...
           </p>
         </div>
       )}
 
-      {!preparing && items.length > 0 && (
+      {activeSeg !== null && !preparing && segItems.length > 0 && (
         <>
           <div className="row playlist-actions">
-            <button onClick={handleDownloadAll} disabled={downloading}>
+            {segments.length > 1 && (
+              <button onClick={() => setActiveSeg(null)} disabled={busy}>
+                ← Chunks
+              </button>
+            )}
+            <button onClick={handleDownloadAll} disabled={downloading || !downloadableItems.length}>
               {downloading
-                ? `Downloading ${downloadedCount}/${items.length}...`
+                ? `Downloading ${downloadedCount}/${downloadableItems.length}...`
                 : nameClashes.length
                   ? "Download anyway"
-                  : "Download all"}
+                  : `Download all (${downloadableItems.length})`}
             </button>
           </div>
 
@@ -184,20 +387,14 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
           )}
 
           <div className="playlist-items">
-            {items.map((item) => (
+            {segItems.map((item) => (
               <PlaylistRow
                 key={item.id}
                 video={item}
                 data={itemData[item.id]}
-                status={
-                  results[item.id]
-                    ? {
-                        ok: results[item.id].success,
-                        text: results[item.id].success ? "OK" : results[item.id].error,
-                      }
-                    : null
-                }
+                status={rowStatus(item)}
                 onEdit={() => setEditingId(item.id)}
+                onUnavailable={() => markUnavailable(item.id)}
               />
             ))}
           </div>

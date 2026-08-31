@@ -3,8 +3,15 @@ async function request(path, options) {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Network error");
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || "Network error");
+    // "rate_limited" (YouTube anti-bot / 429) or "unavailable" (private /
+    // deleted / copyright-blocked video); callers branch on this.
+    err.status = data.status || null;
+    err.httpStatus = res.status;
+    throw err;
+  }
   return data;
 }
 
