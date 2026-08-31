@@ -1,0 +1,34 @@
+{
+  // Settings for the app. Edit a value and restart. Comments are fine (`//`),
+  // trailing commas are not. The folder picker in the UI rewrites output_dir;
+  // everything else is yours to tweak.
+
+  // Where finished mp3s land. Blank = ~/Music/AnimeMp3.
+  "output_dir": "",
+
+  // Playlist
+  // Prep runs in three lanes. Lane 1 (fetch) is the only one that hits
+  // YouTube - too many at once and it shows the "confirm you're not a bot"
+  // wall. If that happens, set fetch_concurrency to 1 and/or raise prep_gap_ms.
+  "fetch_concurrency": 2,        // audio fetches running at once
+  "prep_gap_ms": 800,           // pause between one fetch and the next
+  "tags_concurrency": 3,        // lane 2: AI guess + cover art
+  "normalize_concurrency": 2,   // lane 3: ffmpeg loudness pass (background)
+  "download_concurrency": 2,    // "Download all": tag + save the mp3s
+  "segment_size": 50,           // a long playlist is handled in chunks this big
+
+  // yt-dlp
+  "yt_sleep_interval_requests": 1,
+  "yt_retries": 5,
+  "yt_extractor_retries": 3,
+
+  // Misc
+  "cache_max_mb": 2048,         // scratch cache for prepped-but-unsaved audio
+  "ai_rate_limit_per_min": 60,  // hard safety cap on LLM calls
+
+  // Audio
+  "loudnorm_i": -14.0,          // target loudness in LUFS (Spotify's number)
+  "loudnorm_tp": -1.5,          // true-peak ceiling in dBTP
+  "loudnorm_lra": 11.0,         // loudness range
+  "mp3_quality": 2              // libmp3lame -q:a, 0 (best) .. 9 (worst)
+}

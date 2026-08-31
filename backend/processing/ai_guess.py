@@ -1,29 +1,32 @@
-"""AI-assisted metadata resolution for a YouTube video.
+"""Work out anime / type / number / song / artist for a video.
 
-The whole job is: give the video's title and description to the LLM and let
-it fill in anime / type / number / song / artist. No title pattern-matching -
-titles are too varied for that to help more than it hurts. The only thing
-layered on top is a recovery step: if a value comes back empty or still in
-Japanese script, look it up online (AniList for the anime name, the iTunes
-catalog for song/artist) to get the official romanized version, since those
-are well-known names that do exist romanized somewhere.
+Everything comes from one LLM call over the title and description - no regex
+parsing of titles, they're too inconsistent for that. What's layered on top is
+a recovery pass: when the model returns a field empty or still in kanji, look
+the name up in a real database (AniList for the anime, the iTunes catalogue for
+the song) where the official romanization already exists.
 """
 
 import re
 
-from artwork import search_anime_cover, search_artwork
-from japanese_text import ROMANIZATION_RULE, is_japanese, strip_japanese
-from llm_client import call_llm, extract_json
-from title_parsing import strip_type_labels
-from youtube import RateLimitedError, VideoUnavailableError, get_video_description
+from errors import RateLimitedError, VideoUnavailableError
+from sources.catalog import search_anime_cover, search_artwork
+from sources.llm_client import call_llm, extract_json
+from sources.youtube import get_video_description
+from text import is_japanese, strip_type_labels
 
+# Fields the recovery pass can look up online (type/number always come from the
+# LLM). anime -> AniList, song/artist -> iTunes.
 FIELDS = ("anime", "song", "artist")
 
+ROMANIZATION_RULE = (
+    'Prefer the romanized/English name for song and artist ("Tabibito no Uta", '
+    'not "旅人の唄"). Only fall back to Japanese script if nothing romanized exists.'
+)
 
-# Matches text that is never a real song/artist/anime name - a "Full"/"[4K]"
-# tag, or the OP/ED label itself with an optional number ("Opening 1", "ED
-# FULL"). Small models sometimes echo one of these back as if it were the
-# song title instead of admitting the title/description didn't name one.
+# Things a small model sometimes hands back as if they were a song name when the
+# title didn't actually name one: a "Full"/"[4K]" tag, or the type label itself
+# ("Opening 1", "ED FULL").
 JUNK_VALUE_RE = re.compile(
     r"^(op|opening|ed|ending|ost|soundtrack|nc\s*op|nc\s*ed|ncop|nced|creditless|"
     r"full|short|hd|4k|8k|uhd|tv\s*size|movie|trailer|pv|mv|amv|lyrics|official|"
@@ -77,7 +80,7 @@ def ai_extract_metadata(title, description, hint=None):
     )
 
     try:
-        parsed = extract_json(call_llm(prompt), "{", "}")
+        parsed = extract_json(call_llm(prompt))
     except Exception:
         parsed = {}
     return parsed if isinstance(parsed, dict) else {}
@@ -149,7 +152,7 @@ def ai_romanize_from_itunes(title, guess, snippets):
     )
 
     try:
-        parsed = extract_json(call_llm(prompt), "{", "}")
+        parsed = extract_json(call_llm(prompt))
     except Exception:
         return guess
 
@@ -187,15 +190,12 @@ def ai_guess_with_search(video_id, title, hint, description=None):
     hint = dict(hint or {})
 
     if description is None:
-        # No description handed in (search tab) - fetch it. The playlist flow
-        # passes the description it already got while prefetching the audio, so
-        # this request doesn't happen there.
+        # Search tab: fetch it now. (The playlist flow already has it from the
+        # prefetch and passes it in.) A rate-limit or a dead video has to reach
+        # the caller; anything else, carry on with just the title.
         try:
             description = get_video_description(video_id)
         except (RateLimitedError, VideoUnavailableError):
-            # These are meaningful to the caller (pause the run / skip the
-            # track) - let them bubble up instead of silently proceeding with
-            # no description.
             raise
         except Exception:
             description = ""

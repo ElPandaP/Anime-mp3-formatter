@@ -64,8 +64,7 @@ npm run dev                       # :5173
 
 Then open <http://localhost:5173>.
 
-Output folder is configured in the app itself (stored in `backend/config.json`,
-defaults to `~/Music/AnimeMp3`).
+The config is in `backend/config.json`.
 
 ### LLM config [Optional]
 

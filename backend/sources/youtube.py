@@ -1,9 +1,11 @@
-import re
 import shutil
 from pathlib import Path
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError
+
+from config import CONFIG
+from errors import RateLimitedError, VideoUnavailableError
 
 FFMPEG_LOCATION = shutil.which("ffmpeg")
 
@@ -46,14 +48,6 @@ _UNAVAILABLE_MARKERS = (
 )
 
 
-class RateLimitedError(Exception):
-    """YouTube served an anti-bot / HTTP 429 wall. Back off and retry later."""
-
-
-class VideoUnavailableError(Exception):
-    """The video is private, deleted, copyright-blocked or otherwise unplayable."""
-
-
 def _video_url(video_id):
     return f"https://www.youtube.com/watch?v={video_id}"
 
@@ -65,11 +59,11 @@ def _base_opts(**extra):
         "quiet": True,
         "noprogress": True,
         # Light in-extract pacing. The real spacing for a big playlist comes
-        # from the frontend running these one at a time with a gap between
-        # tracks (see PlaylistTab), so no need to also stall inside each call.
-        "sleep_interval_requests": 1,
-        "retries": 5,
-        "extractor_retries": 3,
+        # from the frontend running lane 1 a few at a time with a gap between
+        # tracks (see PlaylistTab). All tunable in config.json.
+        "sleep_interval_requests": CONFIG["yt_sleep_interval_requests"],
+        "retries": CONFIG["yt_retries"],
+        "extractor_retries": CONFIG["yt_extractor_retries"],
     }
     if FFMPEG_LOCATION:
         opts["ffmpeg_location"] = FFMPEG_LOCATION
@@ -154,32 +148,23 @@ def get_audio_stream_url(video_id):
     return stream_url
 
 
-def download_audio(video_id, work_dir, to_mp3=True):
-    """Download the best audio track. With to_mp3 (default) yt-dlp transcodes it
-    to a 192k mp3; without, the raw bestaudio file is kept as-is (the caller
-    transcodes later, e.g. folded into a loudness pass). Returns
-    (downloaded_path, thumbnail_url, description) - the description comes free
-    from the same extract, so a caller here needs no separate request."""
+def download_audio(video_id, work_dir):
+    """Grab the best audio stream as-is (no transcode - the loudness pass later
+    does the mp3 encode). Returns (path, thumbnail_url, description); the
+    description rides along on the same extract, so no extra request for it."""
     opts = _base_opts(
         format="bestaudio/best",
         outtmpl=str(work_dir / "%(id)s.%(ext)s"),
         noplaylist=True,
     )
-    if to_mp3:
-        opts["postprocessors"] = [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
-        ]
     info = _extract(opts, _video_url(video_id), download=True)
 
     downloads = info.get("requested_downloads") or []
     if downloads and downloads[0].get("filepath"):
-        out_path = Path(downloads[0]["filepath"])
+        path = Path(downloads[0]["filepath"])
     else:
-        ext = "mp3" if to_mp3 else info.get("ext", "webm")
-        out_path = work_dir / f"{info['id']}.{ext}"
-    thumbnail_url = info.get("thumbnail")
-    description = info.get("description") or ""
-    return out_path, thumbnail_url, description
+        path = work_dir / f"{info['id']}.{info.get('ext', 'webm')}"
+    return path, info.get("thumbnail"), info.get("description") or ""
 
 
 def get_video_description(video_id):

@@ -1,14 +1,15 @@
-"""Cover art sources: AniList for actual anime poster/key art, iTunes for
-song/album covers (used as the fallback candidates, and as a stand-in
-"search engine" for song/artist metadata in ai_guess.py)."""
+"""Two catalogue lookups. AniList gives real anime poster art; the iTunes
+Search API gives song/album covers - and doubles as a keyless "search engine"
+for romanized song/artist names over in ai_guess.py. Both return the same
+{artwork_url, track, artist, collection} shape."""
 
 import json
 import re
 import urllib.parse
 import urllib.request
 
-# Several of these hosts (AniList, its image CDN) reject requests with
-# Python's default urllib User-Agent - a normal browser one gets through.
+# AniList (and its image CDN) 403 the default urllib User-Agent; a browser one
+# gets through. Also reused when downloading a chosen cover in audio.py.
 DESKTOP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
 

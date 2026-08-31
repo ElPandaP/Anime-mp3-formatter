@@ -13,11 +13,13 @@ export default function App() {
   const [outputDir, setOutputDir] = useState("");
   const [aiAvailable, setAiAvailable] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
+  const [tuning, setTuning] = useState(null);
 
   useEffect(() => {
     getSettings().then((data) => {
       const available = !!data.ai_available;
       setAiAvailable(available);
+      setTuning(data);
       const stored = localStorage.getItem(AI_ENABLED_KEY);
       setAiEnabled(stored !== null ? stored === "true" : available);
     });
@@ -60,7 +62,7 @@ export default function App() {
       {tab === "search" ? (
         <SearchTab outputDir={outputDir} aiEnabled={aiEnabled} />
       ) : (
-        <PlaylistTab outputDir={outputDir} aiEnabled={aiEnabled} />
+        <PlaylistTab outputDir={outputDir} aiEnabled={aiEnabled} tuning={tuning} />
       )}
     </div>
   );

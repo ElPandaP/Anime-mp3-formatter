@@ -2,19 +2,22 @@ import os
 
 from flask import Flask
 
-import media_cache
-from routes import bp
+from api import bp
+from errors import register_handlers
+from processing import media_cache
+
+DEBUG = os.environ.get("FLASK_DEBUG", "1") != "0"
 
 app = Flask(__name__)
+app.debug = DEBUG
 app.register_blueprint(bp)
+register_handlers(app)
 
-# Wipe any audio left in the scratch cache by a previous session that was
-# closed without downloading. Guarded so the debug reloader's parent process
-# doesn't do it a second time mid-run.
+# Clear out audio left in the scratch cache by a session that quit without
+# downloading. Skipped in the reloader's parent so it only runs once.
 if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-    media_cache.clear_cache()
+    media_cache.clear_all()
 
 if __name__ == "__main__":
-    # threaded=True so the playlist tab can fire several tag-lookup /
-    # download requests at once instead of them queuing behind each other.
-    app.run(debug=True, port=5000, threaded=True)
+    # threaded so the playlist tab's parallel prep/download calls don't queue up.
+    app.run(port=5000, threaded=True)

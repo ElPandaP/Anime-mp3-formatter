@@ -2,72 +2,22 @@ import { useMemo, useRef, useState } from "react";
 import { loadPlaylist, downloadTrack, prefetchAudio, normalizeCached } from "../lib/api";
 import { runPool, buildPreview, sanitizeFilename } from "../lib/utils";
 import { resolvePreparedTags } from "../lib/resolveTags";
+import {
+  BLANK_TAGS, RATE_LIMIT_TEXT, TUNING_DEFAULTS,
+  buildSegments, makeLimiter, sleep,
+} from "../lib/playlist";
 import PlaylistRow from "./PlaylistRow";
 import TagForm from "./TagForm";
 
-// Prep runs in three lanes by priority:
-//   1. fetch  - the ONLY part that hits YouTube. A few at a time with a short
-//      gap; a big burst of concurrent yt-dlp calls trips the "confirm you're
-//      not a bot" wall (which now pauses + retries cleanly if it does hit).
-//   2. tags   - AI guess + cover art off the description fetch already got. No
-//      network to YouTube. A row shows and is editable once this lands.
-//   3. audio  - loudness-normalise the fetched file. Background: only has to be
-//      done by the time that track is downloaded, so it can keep going while
-//      the user reviews tags.
-// If the anti-bot wall starts showing up: drop FETCH_CONCURRENCY to 1 and/or
-// raise PREP_GAP_MS.
-const FETCH_CONCURRENCY = 2;
-const PREP_GAP_MS = 800;
-const TAGS_CONCURRENCY = 3;
-const NORMALIZE_CONCURRENCY = 2;
-const DOWNLOAD_CONCURRENCY = 2;
+// A segment is prepared in three lanes so YouTube isn't the bottleneck:
+//   1. fetch     the only lane that hits YouTube - a few at a time with a gap
+//   2. tags      AI guess + cover art; a row is editable once this lands
+//   3. normalise the loudness pass; runs on in the background while you review
+// Concurrency and pacing for each come from config.json (via the `tuning` prop).
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export default function PlaylistTab({ outputDir, aiEnabled, tuning }) {
+  const t = useMemo(() => ({ ...TUNING_DEFAULTS, ...(tuning || {}) }), [tuning]);
 
-const BLANK_TAGS = { anime: "", type: "OP", number: "", song: "", artist: "" };
-
-// Runs at most `max` of the handed-in async fns at once. Unlike runPool the
-// work isn't known up front - stage-1 feeds jobs in as each fetch completes.
-function makeLimiter(max) {
-  let active = 0;
-  const queue = [];
-  const pump = () => {
-    if (active >= max || !queue.length) return;
-    active++;
-    const { fn, resolve, reject } = queue.shift();
-    Promise.resolve()
-      .then(fn)
-      .then(resolve, reject)
-      .finally(() => {
-        active--;
-        pump();
-      });
-  };
-  return (fn) =>
-    new Promise((resolve, reject) => {
-      queue.push({ fn, resolve, reject });
-      pump();
-    });
-}
-
-// Playlists longer than this are processed in chunks the user picks one at a
-// time, so a single sitting never hammers YouTube hard enough to get blocked.
-const SEGMENT_SIZE = 50;
-
-const RATE_LIMIT_TEXT =
-  "YouTube is rate-limiting requests (anti-bot check). This clears on its own " +
-  "in a few minutes - wait, then hit Retry.";
-
-function buildSegments(count) {
-  if (count <= SEGMENT_SIZE) return [{ start: 0, end: count }];
-  const segments = [];
-  for (let start = 0; start < count; start += SEGMENT_SIZE) {
-    segments.push({ start, end: Math.min(start + SEGMENT_SIZE, count) });
-  }
-  return segments;
-}
-
-export default function PlaylistTab({ outputDir, aiEnabled }) {
   const [url, setUrl] = useState("");
   const [items, setItems] = useState([]);
   const [segments, setSegments] = useState([]);
@@ -135,7 +85,7 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
       const data = await loadPlaylist(url);
       setItems(data.items);
       setSkippedOnLoad(data.skipped_unavailable || 0);
-      const segs = buildSegments(data.items.length);
+      const segs = buildSegments(data.items.length, t.segment_size);
       setSegments(segs);
       setLoadingPlaylist(false);
       // Short lists: no chunking, jump straight in like before.
@@ -159,8 +109,8 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
     setPreparing(true);
     setPreparedCount(slice.filter((it) => itemData[it.id] || itemStatus[it.id] === "skipped").length);
 
-    const runTags = makeLimiter(TAGS_CONCURRENCY);
-    const runNormalize = makeLimiter(NORMALIZE_CONCURRENCY);
+    const runTags = makeLimiter(t.tags_concurrency);
+    const runNormalize = makeLimiter(t.normalize_concurrency);
     const tagJobs = [];
     const normJobs = [];
 
@@ -174,12 +124,12 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
     // normalise (lane 3) and move straight on to the next fetch.
     await runPool(
       slice,
-      FETCH_CONCURRENCY,
+      t.fetch_concurrency,
       async (item, index) => {
         // Idempotent: a retry re-runs the whole slice but skips anything
         // already resolved or already marked gone.
         if (itemData[item.id] || itemStatus[item.id] === "skipped") return;
-        if (index > 0) await sleep(PREP_GAP_MS);
+        if (index > 0) await sleep(t.prep_gap_ms);
         if (stopRef.current) return;
 
         try {
@@ -289,7 +239,7 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
     const resultsAcc = { ...results };
     await runPool(
       downloadableItems,
-      DOWNLOAD_CONCURRENCY,
+      t.download_concurrency,
       async (item) => {
         if (resultsAcc[item.id]?.status === "ok") return;
         const data = itemData[item.id] || {};
@@ -400,7 +350,7 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
       {showPicker && (
         <div className="segments">
           <p>
-            This playlist has {items.length} tracks. Process it in chunks of {SEGMENT_SIZE} to
+            This playlist has {items.length} tracks. Process it in chunks of {t.segment_size} to
             stay under YouTube's rate limit — pick one to start:
           </p>
           <div className="row">
