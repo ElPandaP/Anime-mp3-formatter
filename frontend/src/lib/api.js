@@ -29,6 +29,21 @@ export const searchVideos = (query) =>
 export const getAiGuessOnline = (id, title, guess) =>
   request("/api/ai-guess-online", { method: "POST", body: JSON.stringify({ id, title, guess }) });
 
+// Playlist prep, stage 1 - the only YouTube hit per track. Run one at a time
+// with a gap between calls.
+export const prefetchAudio = (id, title) =>
+  request("/api/prefetch-audio", { method: "POST", body: JSON.stringify({ id, title }) });
+
+// Playlist prep, priority 2 - no network: guess tags off the description
+// stage 1 fetched. A row is ready to show/edit once this returns.
+export const guessTags = (id, title, guess, ai) =>
+  request("/api/guess-tags", { method: "POST", body: JSON.stringify({ id, title, guess, ai }) });
+
+// Playlist prep, priority 3 - no network: loudness-normalise a stage-1 file.
+// Background work; only has to finish before that track is downloaded.
+export const normalizeCached = (id) =>
+  request("/api/normalize-cached", { method: "POST", body: JSON.stringify({ id }) });
+
 export const getStreamUrl = (id) =>
   request("/api/stream", { method: "POST", body: JSON.stringify({ id }) });
 

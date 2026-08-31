@@ -21,7 +21,9 @@ export default function PlaylistRow({ video, data, status, onEdit, onUnavailable
           <div className="video-title">
             {video.title} ({formatDuration(video.duration)})
           </div>
-          <div className="row-preview">{summary || "(no tags yet)"}</div>
+          <div className="row-preview">
+            {data ? summary || "(no tags)" : unavailable ? "" : "preparing…"}
+          </div>
           {data?.artist && <div className="row-artist">{data.artist}</div>}
           {status && (
             <span
@@ -33,7 +35,7 @@ export default function PlaylistRow({ video, data, status, onEdit, onUnavailable
             </span>
           )}
         </div>
-        <button type="button" onClick={onEdit}>
+        <button type="button" onClick={onEdit} disabled={!data || unavailable}>
           Edit
         </button>
       </div>

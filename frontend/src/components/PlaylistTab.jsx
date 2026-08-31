@@ -1,16 +1,54 @@
 import { useMemo, useRef, useState } from "react";
-import { loadPlaylist, downloadTrack } from "../lib/api";
+import { loadPlaylist, downloadTrack, prefetchAudio, normalizeCached } from "../lib/api";
 import { runPool, buildPreview, sanitizeFilename } from "../lib/utils";
-import { resolveItemTags } from "../lib/resolveTags";
+import { resolvePreparedTags } from "../lib/resolveTags";
 import PlaylistRow from "./PlaylistRow";
 import TagForm from "./TagForm";
 
-// Tag prep is network/LLM-bound - several can run at once. Downloads are
-// CPU-bound (ffmpeg mp3 conversion + loudness pass), so keep those lower.
-// Both are deliberately modest: firing hundreds of yt-dlp calls in a burst
-// is what trips YouTube's "confirm you're not a bot" wall.
-const TAG_CONCURRENCY = 3;
+// Prep runs in three lanes by priority:
+//   1. fetch  - the ONLY part that hits YouTube. A few at a time with a short
+//      gap; a big burst of concurrent yt-dlp calls trips the "confirm you're
+//      not a bot" wall (which now pauses + retries cleanly if it does hit).
+//   2. tags   - AI guess + cover art off the description fetch already got. No
+//      network to YouTube. A row shows and is editable once this lands.
+//   3. audio  - loudness-normalise the fetched file. Background: only has to be
+//      done by the time that track is downloaded, so it can keep going while
+//      the user reviews tags.
+// If the anti-bot wall starts showing up: drop FETCH_CONCURRENCY to 1 and/or
+// raise PREP_GAP_MS.
+const FETCH_CONCURRENCY = 2;
+const PREP_GAP_MS = 800;
+const TAGS_CONCURRENCY = 3;
+const NORMALIZE_CONCURRENCY = 2;
 const DOWNLOAD_CONCURRENCY = 2;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const BLANK_TAGS = { anime: "", type: "OP", number: "", song: "", artist: "" };
+
+// Runs at most `max` of the handed-in async fns at once. Unlike runPool the
+// work isn't known up front - stage-1 feeds jobs in as each fetch completes.
+function makeLimiter(max) {
+  let active = 0;
+  const queue = [];
+  const pump = () => {
+    if (active >= max || !queue.length) return;
+    active++;
+    const { fn, resolve, reject } = queue.shift();
+    Promise.resolve()
+      .then(fn)
+      .then(resolve, reject)
+      .finally(() => {
+        active--;
+        pump();
+      });
+  };
+  return (fn) =>
+    new Promise((resolve, reject) => {
+      queue.push({ fn, resolve, reject });
+      pump();
+    });
+}
 
 // Playlists longer than this are processed in chunks the user picks one at a
 // time, so a single sitting never hammers YouTube hard enough to get blocked.
@@ -44,6 +82,9 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
   const [loadingPlaylist, setLoadingPlaylist] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [preparedCount, setPreparedCount] = useState(0);
+  // Audio normalisation still churning in the background after the rows are
+  // already up and editable.
+  const [finishingAudio, setFinishingAudio] = useState(false);
   const [error, setError] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadedCount, setDownloadedCount] = useState(0);
@@ -118,32 +159,31 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
     setPreparing(true);
     setPreparedCount(slice.filter((it) => itemData[it.id] || itemStatus[it.id] === "skipped").length);
 
+    const runTags = makeLimiter(TAGS_CONCURRENCY);
+    const runNormalize = makeLimiter(NORMALIZE_CONCURRENCY);
+    const tagJobs = [];
+    const normJobs = [];
+
+    const finishBlank = (id) => {
+      setItemData((prev) => ({ ...prev, [id]: { ...BLANK_TAGS } }));
+      setPreparedCount((c) => c + 1);
+    };
+
+    // Lane 1: fetch each track's audio from YouTube, a few at a time with a
+    // short gap. The moment one lands, kick off the tag guess (lane 2) and the
+    // normalise (lane 3) and move straight on to the next fetch.
     await runPool(
       slice,
-      TAG_CONCURRENCY,
-      async (item) => {
-        // Idempotent: a retry re-runs this over the whole slice but skips
-        // anything already resolved or already marked gone.
+      FETCH_CONCURRENCY,
+      async (item, index) => {
+        // Idempotent: a retry re-runs the whole slice but skips anything
+        // already resolved or already marked gone.
         if (itemData[item.id] || itemStatus[item.id] === "skipped") return;
+        if (index > 0) await sleep(PREP_GAP_MS);
+        if (stopRef.current) return;
+
         try {
-          const { finalGuess, artworkUrl, artworkCandidates } = await resolveItemTags(
-            item,
-            null,
-            aiEnabled,
-          );
-          setItemData((prev) => ({
-            ...prev,
-            [item.id]: {
-              anime: finalGuess.anime || "",
-              type: finalGuess.type || "OP",
-              number: finalGuess.number || "",
-              song: finalGuess.song || "",
-              artist: finalGuess.artist || "",
-              artworkUrl,
-              artworkCandidates,
-            },
-          }));
-          setPreparedCount((c) => c + 1);
+          await prefetchAudio(item.id, item.title);
         } catch (err) {
           if (err.status === "rate_limited") {
             stopRef.current = true;
@@ -155,18 +195,57 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
             setPreparedCount((c) => c + 1);
             return;
           }
-          // Other failure - leave tags blank for the user to fill by hand.
-          setItemData((prev) => ({
-            ...prev,
-            [item.id]: { anime: "", type: "OP", number: "", song: "", artist: "" },
-          }));
-          setPreparedCount((c) => c + 1);
+          finishBlank(item.id); // no audio - user can still fill tags by hand
+          return;
         }
+
+        tagJobs.push(
+          runTags(async () => {
+            try {
+              const { finalGuess, artworkUrl, artworkCandidates } = await resolvePreparedTags(
+                item,
+                aiEnabled,
+              );
+              setItemData((prev) => ({
+                ...prev,
+                [item.id]: {
+                  anime: finalGuess.anime || "",
+                  type: finalGuess.type || "OP",
+                  number: finalGuess.number || "",
+                  song: finalGuess.song || "",
+                  artist: finalGuess.artist || "",
+                  artworkUrl,
+                  artworkCandidates,
+                },
+              }));
+              setPreparedCount((c) => c + 1);
+            } catch (err) {
+              if (err.status === "rate_limited") {
+                stopRef.current = true;
+                setRateLimited(true);
+              } else {
+                finishBlank(item.id);
+              }
+            }
+          }),
+        );
+
+        normJobs.push(
+          runNormalize(() => normalizeCached(item.id).catch(() => {})),
+        );
       },
       () => stopRef.current,
     );
 
+    // Rows are ready once fetch + tags are done - normalisation can finish on
+    // its own while the user reviews them.
+    await Promise.allSettled(tagJobs);
     setPreparing(false);
+
+    if (normJobs.length) {
+      setFinishingAudio(true);
+      Promise.allSettled(normJobs).then(() => setFinishingAudio(false));
+    }
   }
 
   function handleSaveEdit(values) {
@@ -344,30 +423,36 @@ export default function PlaylistTab({ outputDir, aiEnabled }) {
         </div>
       )}
 
-      {activeSeg !== null && preparing && (
-        <div className="prepare-status">
-          <span className="spinner-large" />
-          <p>
-            Preparing tags: {preparedCount}/{segItems.length}...
-          </p>
-        </div>
-      )}
-
-      {activeSeg !== null && !preparing && segItems.length > 0 && (
+      {activeSeg !== null && segItems.length > 0 && (
         <>
+          {preparing && (
+            <div className="prepare-status">
+              <span className="spinner-large" />
+              <p>
+                Fetching &amp; tagging: {preparedCount}/{segItems.length}...
+              </p>
+            </div>
+          )}
+
           <div className="row playlist-actions">
             {segments.length > 1 && (
               <button onClick={() => setActiveSeg(null)} disabled={busy}>
                 ← Chunks
               </button>
             )}
-            <button onClick={handleDownloadAll} disabled={downloading || !downloadableItems.length}>
+            <button
+              onClick={handleDownloadAll}
+              disabled={preparing || downloading || !downloadableItems.length}
+            >
               {downloading
                 ? `Downloading ${downloadedCount}/${downloadableItems.length}...`
                 : nameClashes.length
                   ? "Download anyway"
                   : `Download all (${downloadableItems.length})`}
             </button>
+            {finishingAudio && !preparing && !downloading && (
+              <span className="status">finishing audio in background…</span>
+            )}
           </div>
 
           {nameClashes.length > 0 && !downloading && (

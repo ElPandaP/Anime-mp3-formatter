@@ -183,17 +183,22 @@ def resolve_anime_name(japanese_anime):
     return candidates[0]["track"] if candidates else None
 
 
-def ai_guess_with_search(video_id, title, hint):
+def ai_guess_with_search(video_id, title, hint, description=None):
     hint = dict(hint or {})
 
-    try:
-        description = get_video_description(video_id)
-    except (RateLimitedError, VideoUnavailableError):
-        # These are meaningful to the caller (pause the run / skip the track) -
-        # let them bubble up instead of silently proceeding with no description.
-        raise
-    except Exception:
-        description = ""
+    if description is None:
+        # No description handed in (search tab) - fetch it. The playlist flow
+        # passes the description it already got while prefetching the audio, so
+        # this request doesn't happen there.
+        try:
+            description = get_video_description(video_id)
+        except (RateLimitedError, VideoUnavailableError):
+            # These are meaningful to the caller (pause the run / skip the
+            # track) - let them bubble up instead of silently proceeding with
+            # no description.
+            raise
+        except Exception:
+            description = ""
 
     raw = ai_extract_metadata(title, description, hint)
     working = {

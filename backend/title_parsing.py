@@ -36,7 +36,9 @@ def sanitize_filename(name):
 def build_display_title(anime, kind, number, song):
     anime = (anime or "").strip()
     kind = (kind or "").strip()
-    number = (number or "").strip()
+    # The OP/ED number is a bare numeral - strip anything else, and OST carries
+    # no number at all.
+    number = re.sub(r"\D", "", number or "")
     song = (song or "").strip()
 
     if kind.upper() == "OST":

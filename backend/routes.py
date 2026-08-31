@@ -1,8 +1,9 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
+import media_cache
 from ai_guess import ai_guess_with_search
 from artwork import search_anime_cover, search_artwork
-from audio import process_download
+from audio import finalize_download, normalize_cached, prefetch_audio
 from folder_dialog import pick_folder_dialog
 from llm_client import LLM_API_KEY, ai_guess_rate_limit_ok
 from settings_store import DEFAULT_OUTPUT_DIR, load_config, save_config
@@ -40,7 +41,7 @@ def _build_video_entry(entry, include_channel=False):
 
 
 def _download_from_payload(item, output_dir):
-    return process_download(
+    return finalize_download(
         video_id=item.get("id"),
         anime=item.get("anime", ""),
         kind=item.get("type", ""),
@@ -114,12 +115,88 @@ def ai_guess_online():
         return jsonify({"error": str(exc)}), 500
 
 
+@bp.route("/api/prefetch-audio", methods=["POST"])
+def prefetch_audio_route():
+    """Playlist prep, stage 1 (serialised, spaced - the only YouTube hit per
+    track): pull the raw audio + description into the scratch cache."""
+    data = request.get_json(force=True)
+    video_id = (data.get("id") or "").strip()
+    if not video_id:
+        return jsonify({"error": "Missing id"}), 400
+    try:
+        prefetch_audio(video_id)
+    except RateLimitedError:
+        return _rate_limited_response()
+    except VideoUnavailableError as exc:
+        return jsonify({"status": "unavailable", "error": str(exc)}), 422
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/guess-tags", methods=["POST"])
+def guess_tags_route():
+    """Playlist prep, priority 2 (no network): guess the tags off the
+    description stage 1 already fetched. This is all a row needs before the
+    user can see and edit it - normalisation happens separately, lower
+    priority. Safe to run several at once."""
+    data = request.get_json(force=True)
+    video_id = (data.get("id") or "").strip()
+    title = (data.get("title") or "").strip()
+    if not video_id or not title:
+        return jsonify({"error": "Missing id or title"}), 400
+
+    result = None
+    if data.get("ai") and ai_guess_rate_limit_ok():
+        try:
+            result = ai_guess_with_search(
+                video_id, title, data.get("guess"),
+                description=media_cache.get_description(video_id),
+            )
+        except RateLimitedError:
+            return _rate_limited_response()
+        except Exception:
+            result = None
+    return jsonify({"result": result})
+
+
+@bp.route("/api/normalize-cached", methods=["POST"])
+def normalize_cached_route():
+    """Playlist prep, priority 3 (no network): loudness-normalise a stage-1
+    audio file in the cache. Runs in the background - only has to be done by
+    the time that track is downloaded."""
+    data = request.get_json(force=True)
+    video_id = (data.get("id") or "").strip()
+    if not video_id:
+        return jsonify({"error": "Missing id"}), 400
+    try:
+        normalize_cached(video_id)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/cached-audio/<video_id>", methods=["GET"])
+def cached_audio(video_id):
+    path = media_cache.any_audio_path(video_id)
+    if not path:
+        return jsonify({"error": "Not cached"}), 404
+    mimetype = {
+        ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "audio/mp4",
+        ".webm": "audio/webm", ".opus": "audio/ogg", ".ogg": "audio/ogg",
+    }.get(path.suffix, "application/octet-stream")
+    return send_file(path, mimetype=mimetype)
+
+
 @bp.route("/api/stream", methods=["POST"])
 def stream():
     data = request.get_json(force=True)
     video_id = (data.get("id") or "").strip()
     if not video_id:
         return jsonify({"error": "Missing video id"}), 400
+    # Already pulled down during the playlist run - play the local file.
+    if media_cache.has_audio(video_id):
+        return jsonify({"url": f"/api/cached-audio/{video_id}"})
     try:
         stream_url = get_audio_stream_url(video_id)
         if not stream_url:
@@ -139,6 +216,10 @@ def playlist():
     url = (data.get("url") or "").strip()
     if not url:
         return jsonify({"error": "Playlist URL is empty"}), 400
+
+    # A new playlist means the previous run's prepared-but-not-downloaded audio
+    # is dead weight - ditch it now rather than let it pile up.
+    media_cache.clear_cache()
 
     try:
         title, entries, skipped = playlist_entries(url)

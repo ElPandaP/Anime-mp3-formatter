@@ -1,5 +1,6 @@
 import re
 import shutil
+from pathlib import Path
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError
@@ -12,7 +13,8 @@ FFMPEG_LOCATION = shutil.which("ffmpeg")
 _RATE_LIMIT_MARKERS = (
     "confirm you're not a bot",
     "confirm you’re not a bot",  # curly apostrophe variant
-    "sign in to confirm",
+    "sign in to confirm you're not a bot",
+    "sign in to confirm you’re not a bot",
     "http error 429",
     "too many requests",
     "429: too many requests",
@@ -33,8 +35,12 @@ _UNAVAILABLE_MARKERS = (
     "content is not available on this app",
     "members-only content",
     "join this channel to get access",
+    "sign in to confirm your age",  # age-restricted - unplayable without cookies
+    "confirm your age",
+    "inappropriate for some users",
     "removed for violating youtube's",
     "is not available in your country",
+    "made this video available in your country",  # "uploader has not made this video available in your country"
     "this live event will begin",
     "premieres in",
 )
@@ -58,12 +64,10 @@ def _base_opts(**extra):
     opts = {
         "quiet": True,
         "noprogress": True,
-        # Pace requests so a large playlist doesn't hammer YouTube into showing
-        # its "confirm you're not a bot" wall. Random 1-3s between downloads,
-        # ~1s between metadata requests.
+        # Light in-extract pacing. The real spacing for a big playlist comes
+        # from the frontend running these one at a time with a gap between
+        # tracks (see PlaylistTab), so no need to also stall inside each call.
         "sleep_interval_requests": 1,
-        "sleep_interval": 1,
-        "max_sleep_interval": 3,
         "retries": 5,
         "extractor_retries": 3,
     }
@@ -150,20 +154,32 @@ def get_audio_stream_url(video_id):
     return stream_url
 
 
-def download_audio(video_id, work_dir):
+def download_audio(video_id, work_dir, to_mp3=True):
+    """Download the best audio track. With to_mp3 (default) yt-dlp transcodes it
+    to a 192k mp3; without, the raw bestaudio file is kept as-is (the caller
+    transcodes later, e.g. folded into a loudness pass). Returns
+    (downloaded_path, thumbnail_url, description) - the description comes free
+    from the same extract, so a caller here needs no separate request."""
     opts = _base_opts(
         format="bestaudio/best",
         outtmpl=str(work_dir / "%(id)s.%(ext)s"),
         noplaylist=True,
-        postprocessors=[
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
-        ],
     )
+    if to_mp3:
+        opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
+        ]
     info = _extract(opts, _video_url(video_id), download=True)
 
-    mp3_path = work_dir / f"{info['id']}.mp3"
+    downloads = info.get("requested_downloads") or []
+    if downloads and downloads[0].get("filepath"):
+        out_path = Path(downloads[0]["filepath"])
+    else:
+        ext = "mp3" if to_mp3 else info.get("ext", "webm")
+        out_path = work_dir / f"{info['id']}.{ext}"
     thumbnail_url = info.get("thumbnail")
-    return mp3_path, thumbnail_url
+    description = info.get("description") or ""
+    return out_path, thumbnail_url, description
 
 
 def get_video_description(video_id):

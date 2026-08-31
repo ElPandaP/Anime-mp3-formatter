@@ -14,6 +14,16 @@ export default function TagForm({ video, outputDir, queryGuess, aiGuess, initial
   const [downloading, setDownloading] = useState(false);
   const isEditMode = typeof onSave === "function";
 
+  // OST has no OP/ED number; everything else takes digits only.
+  const hasNumber = f.type !== "OST";
+  const number = hasNumber ? f.number : "";
+
+  function handleType(e) {
+    const next = e.target.value;
+    f.setType(next);
+    if (next === "OST") f.setNumber("");
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
 
@@ -21,7 +31,7 @@ export default function TagForm({ video, outputDir, queryGuess, aiGuess, initial
       onSave({
         anime: f.anime,
         type: f.type,
-        number: f.number,
+        number,
         song: f.song,
         artist: f.artist,
         artworkUrl: f.artworkUrl,
@@ -37,7 +47,7 @@ export default function TagForm({ video, outputDir, queryGuess, aiGuess, initial
         id: video.id,
         anime: f.anime,
         type: f.type,
-        number: f.number,
+        number,
         song: f.song,
         artist: f.artist,
         artwork_url: f.artworkUrl,
@@ -59,20 +69,28 @@ export default function TagForm({ video, outputDir, queryGuess, aiGuess, initial
       </div>
       <div className="field-row">
         <label>Type</label>
-        <select value={f.type} onChange={(e) => f.setType(e.target.value)}>
+        <select value={f.type} onChange={handleType}>
           <option value="OP">OP</option>
           <option value="ED">ED</option>
           <option value="OST">OST</option>
         </select>
-        <input className="f-numero" value={f.number} onChange={(e) => f.setNumber(e.target.value)} placeholder="No." />
+        {hasNumber && (
+          <input
+            className="f-numero"
+            value={number}
+            onChange={(e) => f.setNumber(e.target.value.replace(/\D/g, ""))}
+            inputMode="numeric"
+            placeholder="No."
+          />
+        )}
       </div>
       <div className="field-row">
         <label>Song</label>
-        <input value={f.song} onChange={(e) => f.setSong(e.target.value)} required />
+        <input value={f.song} onChange={(e) => f.setSong(e.target.value)} />
       </div>
       <div className="field-row">
         <label>Artist</label>
-        <input value={f.artist} onChange={(e) => f.setArtist(e.target.value)} required />
+        <input value={f.artist} onChange={(e) => f.setArtist(e.target.value)} />
       </div>
       <div className="field-row preview-row">
         <span className="preview-label">Will be saved as:</span>
